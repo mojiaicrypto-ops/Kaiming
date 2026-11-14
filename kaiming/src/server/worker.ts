@@ -2,9 +2,12 @@
  * The workbench worker: the one place that turns accepted inputs into real Pi runs.
  *
  * Sessions are independent: one long run must not stop another session's message from starting.
- * The worker therefore starts every session that has no run in flight, while the store still allows
- * at most one processing input per session. A session whose work is blocked (no model, missing
- * directory, a controlled Task) ends its run quickly and never spins the loop.
+ * The worker therefore starts every runnable session that has no run in flight, while the store
+ * still allows at most one processing input per session. A session with no queued, running or
+ * interrupted input is not probed at all: it can only be idle, and re-deriving that per pass made
+ * idle CPU grow with the session table (`notify()` is the wake path that matters, the idle tick is
+ * its safety net). A session whose work is blocked (no model, missing directory, a controlled
+ * Task) ends its run quickly and never spins the loop.
  */
 import type { Store } from '../store/store.ts';
 import type { RunOutcome } from '../runtime/runner.ts';
@@ -61,12 +64,12 @@ export class WorkbenchWorker {
 
   private async run(): Promise<void> {
     while (!this.stopped) {
-      for (const session of this.options.store.listSessions()) {
-        if (this.stopped || this.runs.has(session.id)) continue;
+      for (const sessionId of this.options.store.listRunnableSessionIds()) {
+        if (this.stopped || this.runs.has(sessionId)) continue;
         // Starting is synchronous up to the first await; recording the promise before returning
         // means the next pass cannot start the same session twice.
-        const run = this.runOne(session.id);
-        this.runs.set(session.id, run);
+        const run = this.runOne(sessionId);
+        this.runs.set(sessionId, run);
       }
       // Wait for a completion or new input. The timeout is only a safety net for a runner that
       // returns without notifying; it is not the scheduling interval.

@@ -22,6 +22,20 @@ function fixture(): Store {
   store.createProject({ id: 'p-1', realPath: root });
   store.createSession({ id: 's-1', projectId: 'p-1', roleId: 'chief', cwd: root });
   store.createSession({ id: 's-2', projectId: 'p-1', roleId: 'chief', cwd: root });
+  // The worker only probes sessions the store can act on, so a test that wants a session started
+  // gives it something to do first.
+  for (const id of ['s-1', 's-2']) {
+    store.acceptInput({
+      inputId: `i-${id}`,
+      projectId: 'p-1',
+      sessionId: id,
+      sourceKey: `${id}:1`,
+      requestKey: `i-${id}`,
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'go' }] },
+    });
+  }
   return store;
 }
 

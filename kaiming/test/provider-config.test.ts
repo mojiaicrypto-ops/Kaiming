@@ -536,9 +536,11 @@ describe('a saved provider reaches the running runtime', () => {
         models: [{ id: 'second-1', name: 'second-1' }],
       });
       expect(written.ok).toBe(true);
-      // The cache still says no (this is the defect the reload exists for)...
-      expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(false);
-      // ...and after the reload a run can use it, without restarting the process.
+      // A change on disk reaches the next availability answer with no restart and no explicit
+      // reload: isAvailable serves the SDK snapshot but re-reads when the config files' stamp
+      // (mtime+size) moves (R5: a saved configuration must reach the next queued input).
+      expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(true);
+      // The explicit reload stays as the belt-and-braces path for the same fact.
       await factory.reload();
       expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(true);
     } finally {

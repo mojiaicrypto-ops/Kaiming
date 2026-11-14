@@ -902,3 +902,13 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：`test/deliverable.test.ts` 现有 ignored 排除、tracked ignored 保留、前 205 个 ignored 路径分批、删除 ignored 产物摘要不变、父仓库 ignore 规则以及 Git 不可读时拒绝观察，共 8 例；`test/report.test.ts` 新增 Git 不可读时 Review 报告被拒绝，并在 Review 绑定路径中断言不包含 `.gitignore` 与 `docs/**`。服务端全量 **62 文件/607 用例通过**；webapp **20 文件/133 用例通过**；两端 `tsc --noEmit` 和 webapp `vite build` 通过。首次并行全量运行出现一次 Git 提交测试波动；该测试单文件运行通过，随后全量复跑通过。
 
 **边界**：旧 Review 的 `deliveryState` 若已经记录了 ignored 路径，不会历史迁移，需要一次新的 Review 才能换成稳定路径；本次没有引入项目专属产物目录白名单，也没有自动执行 `git rm --cached`；Git 本身不可用但仓库标记存在仍按缺项阻断。
+
+## 2026-11-14 · 空闲调度成本治理（worker 按需探测 / 可用性快照 / 语句缓存）
+
+**现象**：生产 workbench 进程空载平均 1.56 核、RSS ~1.0G，与是否有任务无关。CPU profile（CDP 采样）定位三处放大：worker 每 250ms 对全部 session 逐个探测 `runNext`（346 会话 ≈1388 探测/秒）；每次探测的 `isAvailable` 走 SDK 全量可用性刷新（42 个内置 provider 逐个凭据磁盘读取 + 快照重建）；store 每次查询重新 `prepare`。GC 占 profile 19.5%，为分配 churn 的结果。
+
+**实现**：`Store.listRunnableSessionIds()` 返回 queued/processing/interrupted 三态去重集合（三种非 idle 认领结果的来源状态全集），`WorkbenchWorker.run` 每轮只探测该集合；`notify()` 仍是即时唤醒路径，250ms tick 仍为兜底，busy/blocked/controlled 结果面不变。`PiRuntimeFactory.isAvailable` 改答 SDK 内存可用性快照，models.json/auth.json/models-store.json 的 (mtimeMs,size) 戳变化才 `refresh({allowNetwork:false})`；`reload()` 保留为保存路径兜底（methods.ts:222），并按评审意见改为刷新前取戳、之后赋值（并发窗口自愈）。Store 全部查询走 `stmt()` 语句缓存（按最终 SQL 文本键控，动态 IN-list/pragma 各得一个形状条目；close 清空）。R5 的"可见时机"按用户决定明确为**文件变化即在下一次 isAvailable 生效**（不再等显式 reload），`provider-config.test.ts` 相应更新。
+
+**证据**：同一数据副本（347 会话、0 待运行、假 provider 阻断真实投递）A/B：改动前 42s 窗口 62s CPU（**148%**）/RSS ~940MB；改动后同窗口 **0s** CPU（全程含启动仅 1 CPU 秒）/RSS ~50MB，`GET /` 200 正常服务。新增 `test/worker-idle-scan.test.ts`（负向控制：无输入/纯终态会话永不探测、三态会话 busy/blocked/claimed 结果面保留、新队列即被拾起）、`test/availability-cache.test.ts`（monkey-patch 全量路径不得被命中；手改文件双向翻转）、`test/store-statement-reuse.test.ts`（缓存语句重绑定、写后读可见、重开库）。旧实现 + 新测试 red（6 失败）→ 新实现 green；全量 **65 文件/616 用例通过**，`tsc --noEmit` 通过。独立 Test passed（复跑全量并核实负向控制）；独立 Review passed（对照 SDK 源码与 S3 逐字 diff 验证，P3 发现 reload 取戳时序已修复并经同一评审确认关闭）。计划/评审/结算存于 `.dev/work/worker-idle-scan-20261114/`。
+
+**边界**：同毫秒同大小重写凭据文件不被戳感知（正式保存路径有 reload 兜底）；戳变化瞬间的并发 isAvailable 可能各自触发一次全量刷新（SDK seq 保护最终正确，仅偶发重复工作）；浏览器 E2E 未运行；A/B 基准为记录证据未由独立 Test 复跑；改动需重启 workbench 生效。

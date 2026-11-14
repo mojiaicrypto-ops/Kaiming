@@ -6,7 +6,7 @@
  * Driver: Node's built-in `node:sqlite` (no native dependency).
  */
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import { digestOfPaths, type DeliveryState } from '../runtime/deliverable.ts';
 
 export type InputStatus =
@@ -797,6 +797,12 @@ export class Store {
   private readonly clock: () => string;
   /** Depth of the current transaction; nested helpers join the outer one. */
   private transactionDepth = 0;
+  /**
+   * Prepared statements are reusable: prepare re-parses SQL on every call, and the claim path
+   * runs the same few statements at idle-tick cadence. Keyed by final SQL text, so dynamic SQL
+   * (placeholder lists) gets one entry per shape instead of being missed.
+   */
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(options: OpenStoreOptions) {
     this.serverEpoch = options.serverEpoch;
@@ -814,7 +820,16 @@ export class Store {
   }
 
   close(): void {
+    this.statements.clear();
     this.db.close();
+  }
+
+  private stmt(sql: string): StatementSync {
+    const cached = this.statements.get(sql);
+    if (cached !== undefined) return cached;
+    const prepared = this.db.prepare(sql);
+    this.statements.set(sql, prepared);
+    return prepared;
   }
 
   /** The generation this store instance writes on claim (used by input correlation markers). */
@@ -824,15 +839,12 @@ export class Store {
 
   createProject(params: CreateProjectParams): void {
     const timestamp = this.clock();
-    this.db
-      .prepare(
-        'INSERT INTO projects (id, realPath, revision, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)',
-      )
+    this.stmt('INSERT INTO projects (id, realPath, revision, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)',)
       .run(params.id, params.realPath, timestamp, timestamp);
   }
 
   getProject(projectId: string): ProjectRow | undefined {
-    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as
+    const row = this.stmt('SELECT * FROM projects WHERE id = ?').get(projectId) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toProjectRow(row);
@@ -845,8 +857,7 @@ export class Store {
       if (project === undefined) {
         throw new StoreError('NOT_FOUND', 'project does not exist', { projectId: params.projectId });
       }
-      this.db
-        .prepare('UPDATE projects SET initializationRef = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+      this.stmt('UPDATE projects SET initializationRef = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(JSON.stringify(params.initializationRef), this.clock(), params.projectId);
       return this.getProject(params.projectId) as ProjectRow;
     });
@@ -854,7 +865,7 @@ export class Store {
 
   /** realpath is the identity of a project (R5): the same directory is the same project. */
   getProjectByRealPath(realPath: string): ProjectRow | undefined {
-    const row = this.db.prepare('SELECT * FROM projects WHERE realPath = ?').get(realPath) as
+    const row = this.stmt('SELECT * FROM projects WHERE realPath = ?').get(realPath) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toProjectRow(row);
@@ -897,8 +908,7 @@ export class Store {
           projectId: occupant.id,
         });
       }
-      const outcome = this.db
-        .prepare('UPDATE projects SET realPath = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+      const outcome = this.stmt('UPDATE projects SET realPath = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
         .run(params.realPath, this.clock(), params.projectId, params.expectedRevision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'project revision does not match', {
@@ -906,11 +916,8 @@ export class Store {
           actual: project.revision,
         });
       }
-      this.db
-        .prepare(
-          `UPDATE sessions SET cwd = (SELECT realPath FROM projects WHERE id = ?), revision = revision + 1, updatedAt = ?
-             WHERE projectId = ?`,
-        )
+      this.stmt(`UPDATE sessions SET cwd = (SELECT realPath FROM projects WHERE id = ?), revision = revision + 1, updatedAt = ?
+         WHERE projectId = ?`,)
         .run(params.projectId, this.clock(), params.projectId);
       return this.getProject(params.projectId) as ProjectRow;
     });
@@ -918,10 +925,7 @@ export class Store {
 
   createSession(params: CreateSessionParams): void {
     const timestamp = this.clock();
-    this.db
-      .prepare(
-        'INSERT INTO sessions (id, projectId, roleId, specialization, cwd, channel, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',
-      )
+    this.stmt('INSERT INTO sessions (id, projectId, roleId, specialization, cwd, channel, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',)
       .run(
         params.id,
         params.projectId,
@@ -948,8 +952,7 @@ export class Store {
         kind: params.kind,
         payload: params.payload,
       });
-      const receipt = this.db
-        .prepare('SELECT method, paramsDigest, status, result FROM request_receipts WHERE requestKey = ?')
+      const receipt = this.stmt('SELECT method, paramsDigest, status, result FROM request_receipts WHERE requestKey = ?')
         .get(params.requestKey) as
         | { method: string; paramsDigest: string; status: string; result: string | null }
         | undefined;
@@ -974,24 +977,19 @@ export class Store {
         };
       }
 
-      const session = this.db
-        .prepare('SELECT id FROM sessions WHERE id = ?')
+      const session = this.stmt('SELECT id FROM sessions WHERE id = ?')
         .get(params.sessionId) as { id: string } | undefined;
       if (session === undefined) {
         throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
       }
 
-      const seqRow = this.db
-        .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS nextSeq FROM session_inputs WHERE sessionId = ?')
+      const seqRow = this.stmt('SELECT COALESCE(MAX(seq), 0) + 1 AS nextSeq FROM session_inputs WHERE sessionId = ?')
         .get(params.sessionId) as { nextSeq: number };
       const timestamp = this.clock();
-      this.db
-        .prepare(
-          `INSERT INTO session_inputs
-             (inputId, projectId, sessionId, taskId, actorId, seq, sourceKey, paramsDigest, kind,
-              payload, status, revision, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?)`,
-        )
+      this.stmt(`INSERT INTO session_inputs
+         (inputId, projectId, sessionId, taskId, actorId, seq, sourceKey, paramsDigest, kind,
+          payload, status, revision, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?)`,)
         .run(
           params.inputId,
           params.projectId,
@@ -1007,11 +1005,8 @@ export class Store {
           timestamp,
         );
       const result = { inputId: params.inputId, status: 'queued', revision: 1 };
-      this.db
-        .prepare(
-          `INSERT INTO request_receipts (requestKey, method, paramsDigest, status, result, createdAt, updatedAt)
-           VALUES (?, ?, ?, 'committed', ?, ?, ?)`,
-        )
+      this.stmt(`INSERT INTO request_receipts (requestKey, method, paramsDigest, status, result, createdAt, updatedAt)
+       VALUES (?, ?, ?, 'committed', ?, ?, ?)`,)
         .run(params.requestKey, params.method, paramsDigest, JSON.stringify(result), timestamp, timestamp);
       return { ...result, deduped: false } as AcceptResult;
     });
@@ -1026,8 +1021,7 @@ export class Store {
     | { readonly kind: 'run' }
     | { readonly kind: 'replay'; readonly result: unknown; readonly error: unknown } {
     return this.transaction(() => {
-      const receipt = this.db
-        .prepare('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
+      const receipt = this.stmt('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
         .get(params.requestKey) as
         | { method: string; paramsDigest: string; status: string; result: string | null; error: string | null }
         | undefined;
@@ -1050,11 +1044,8 @@ export class Store {
         };
       }
       const timestamp = this.clock();
-      this.db
-        .prepare(
-          `INSERT INTO request_receipts (requestKey, method, paramsDigest, status, createdAt, updatedAt)
-           VALUES (?, ?, ?, 'pending', ?, ?)`,
-        )
+      this.stmt(`INSERT INTO request_receipts (requestKey, method, paramsDigest, status, createdAt, updatedAt)
+       VALUES (?, ?, ?, 'pending', ?, ?)`,)
         .run(params.requestKey, params.method, params.paramsDigest, timestamp, timestamp);
       return { kind: 'run' as const };
     });
@@ -1066,11 +1057,8 @@ export class Store {
     result?: unknown;
     error?: { code: string; message: string; details?: unknown };
   }): void {
-    const outcome = this.db
-      .prepare(
-        `UPDATE request_receipts SET status = 'committed', result = ?, error = ?, updatedAt = ?
-           WHERE requestKey = ? AND status = 'pending'`,
-      )
+    const outcome = this.stmt(`UPDATE request_receipts SET status = 'committed', result = ?, error = ?, updatedAt = ?
+       WHERE requestKey = ? AND status = 'pending'`,)
       .run(
         params.result === undefined ? null : JSON.stringify(params.result),
         params.error === undefined ? null : JSON.stringify(params.error),
@@ -1091,8 +1079,7 @@ export class Store {
     readonly result: unknown;
     readonly error: unknown;
   } | undefined {
-    const row = this.db
-      .prepare('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
+    const row = this.stmt('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
       .get(requestKey) as
       | { method: string; paramsDigest: string; status: string; result: string | null; error: string | null }
       | undefined;
@@ -1133,13 +1120,10 @@ export class Store {
         });
       }
       const timestamp = this.clock();
-      this.db
-        .prepare(
-          `INSERT INTO interactions
-             (interactionId, projectId, sessionId, inputId, taskId, method, title, message, options,
-              placeholder, state, requestKey, revision, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1, ?, ?)`,
-        )
+      this.stmt(`INSERT INTO interactions
+         (interactionId, projectId, sessionId, inputId, taskId, method, title, message, options,
+          placeholder, state, requestKey, revision, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1, ?, ?)`,)
         .run(
           params.interactionId,
           params.projectId,
@@ -1160,7 +1144,7 @@ export class Store {
   }
 
   getInteraction(interactionId: string): InteractionRow | undefined {
-    return this.db.prepare('SELECT * FROM interactions WHERE interactionId = ?').get(interactionId) as
+    return this.stmt('SELECT * FROM interactions WHERE interactionId = ?').get(interactionId) as
       | InteractionRow
       | undefined;
   }
@@ -1172,35 +1156,27 @@ export class Store {
    * the chief's channel — filtering strictly by sessionId hid it and the member waited forever.
    */
   listPendingInteractionsForChief(chiefSessionId: string): InteractionRow[] {
-    return this.db
-      .prepare(
-        `SELECT i.* FROM interactions i
-          WHERE i.state = 'pending'
-            AND (i.sessionId = ?
-                 OR i.taskId IN (SELECT id FROM tasks WHERE chiefSessionId = ?))
-          ORDER BY i.createdAt, i.interactionId`,
-      )
+    return this.stmt(`SELECT i.* FROM interactions i
+      WHERE i.state = 'pending'
+        AND (i.sessionId = ?
+             OR i.taskId IN (SELECT id FROM tasks WHERE chiefSessionId = ?))
+      ORDER BY i.createdAt, i.interactionId`,)
       .all(chiefSessionId, chiefSessionId) as unknown as InteractionRow[];
   }
 
   listPendingInteractions(sessionId: string): InteractionRow[] {
-    return this.db
-      .prepare("SELECT * FROM interactions WHERE sessionId = ? AND state = 'pending' ORDER BY createdAt, interactionId")
+    return this.stmt("SELECT * FROM interactions WHERE sessionId = ? AND state = 'pending' ORDER BY createdAt, interactionId")
       .all(sessionId) as unknown as InteractionRow[];
   }
 
   /** Every unanswered question in one project: the project page's "waiting for you" source. */
   listPendingInteractionsForProject(projectId: string): InteractionRow[] {
-    return this.db
-      .prepare(
-        "SELECT * FROM interactions WHERE projectId = ? AND state = 'pending' ORDER BY createdAt, interactionId",
-      )
+    return this.stmt("SELECT * FROM interactions WHERE projectId = ? AND state = 'pending' ORDER BY createdAt, interactionId",)
       .all(projectId) as unknown as InteractionRow[];
   }
 
   listInteractions(sessionId: string): InteractionRow[] {
-    return this.db
-      .prepare('SELECT * FROM interactions WHERE sessionId = ? ORDER BY createdAt, interactionId')
+    return this.stmt('SELECT * FROM interactions WHERE sessionId = ? ORDER BY createdAt, interactionId')
       .all(sessionId) as unknown as InteractionRow[];
   }
 
@@ -1236,12 +1212,9 @@ export class Store {
           interactionId: params.interactionId,
         });
       }
-      const outcome = this.db
-        .prepare(
-          `UPDATE interactions
-             SET state = 'resolved', response = ?, answeredBy = ?, requestKey = ?, revision = revision + 1, updatedAt = ?
-           WHERE interactionId = ? AND revision = ? AND state = 'pending'`,
-        )
+      const outcome = this.stmt(`UPDATE interactions
+         SET state = 'resolved', response = ?, answeredBy = ?, requestKey = ?, revision = revision + 1, updatedAt = ?
+       WHERE interactionId = ? AND revision = ? AND state = 'pending'`,)
         .run(response, params.answeredBy, params.requestKey, this.clock(), params.interactionId, params.expectedRevision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'interaction revision does not match', {
@@ -1258,11 +1231,8 @@ export class Store {
    * never be resumed, so it must not keep a page waiting.
    */
   staleInteractionsForInput(params: { inputId: string }): number {
-    const outcome = this.db
-      .prepare(
-        `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
-           WHERE inputId = ? AND state = 'pending'`,
-      )
+    const outcome = this.stmt(`UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+       WHERE inputId = ? AND state = 'pending'`,)
       .run(this.clock(), params.inputId);
     return Number(outcome.changes);
   }
@@ -1290,8 +1260,7 @@ export class Store {
     }
     // A Task keeps referencing the chief session that coordinated it, so that record cannot be
     // deleted without destroying delivery history: it is a reason to refuse, not to cascade.
-    const chiefing = this.db
-      .prepare('SELECT COUNT(*) AS n FROM tasks WHERE chiefSessionId = ?')
+    const chiefing = this.stmt('SELECT COUNT(*) AS n FROM tasks WHERE chiefSessionId = ?')
       .get(sessionId) as { n: number };
     if (chiefing.n > 0) {
       gaps.push(`the session coordinated ${chiefing.n} recorded Task(s)`);
@@ -1307,8 +1276,7 @@ export class Store {
     for (const member of this.listTaskSessions(sessionId)) {
       gaps.push(`the session is a member of Task ${member.taskId}`);
     }
-    const referenced = this.db
-      .prepare('SELECT COUNT(*) AS n FROM results WHERE sessionId = ?')
+    const referenced = this.stmt('SELECT COUNT(*) AS n FROM results WHERE sessionId = ?')
       .get(sessionId) as { n: number };
     if (referenced.n > 0) {
       gaps.push(`the session produced ${referenced.n} recorded result(s)`);
@@ -1353,8 +1321,7 @@ export class Store {
         }
       }
       const timestamp = this.clock();
-      const outcome = this.db
-        .prepare('UPDATE sessions SET archivedAt = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+      const outcome = this.stmt('UPDATE sessions SET archivedAt = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
         .run(params.archived ? timestamp : null, timestamp, params.sessionId, params.expectedRevision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
@@ -1377,12 +1344,11 @@ export class Store {
       if (session === undefined) {
         throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
       }
-      this.db.prepare('DELETE FROM interactions WHERE sessionId = ?').run(params.sessionId);
-      this.db.prepare('DELETE FROM session_inputs WHERE sessionId = ?').run(params.sessionId);
-      this.db.prepare('DELETE FROM session_bindings WHERE sessionId = ?').run(params.sessionId);
-      this.db.prepare('DELETE FROM task_sessions WHERE sessionId = ?').run(params.sessionId);
-      const outcome = this.db
-        .prepare('DELETE FROM sessions WHERE id = ? AND revision = ?')
+      this.stmt('DELETE FROM interactions WHERE sessionId = ?').run(params.sessionId);
+      this.stmt('DELETE FROM session_inputs WHERE sessionId = ?').run(params.sessionId);
+      this.stmt('DELETE FROM session_bindings WHERE sessionId = ?').run(params.sessionId);
+      this.stmt('DELETE FROM task_sessions WHERE sessionId = ?').run(params.sessionId);
+      const outcome = this.stmt('DELETE FROM sessions WHERE id = ? AND revision = ?')
         .run(params.sessionId, params.expectedRevision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
@@ -1408,8 +1374,7 @@ export class Store {
         throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
       }
       const title = params.title === null || params.title.trim() === '' ? null : params.title.trim();
-      const outcome = this.db
-        .prepare('UPDATE sessions SET title = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+      const outcome = this.stmt('UPDATE sessions SET title = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
         .run(title, this.clock(), params.sessionId, params.expectedRevision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
@@ -1450,12 +1415,9 @@ export class Store {
           inputId: params.inputId,
         });
       }
-      const outcome = this.db
-        .prepare(
-          `UPDATE session_inputs
-             SET status = ?, recovery = ?, revision = revision + 1, updatedAt = ?
-           WHERE inputId = ? AND revision = ? AND status = 'interrupted'`,
-        )
+      const outcome = this.stmt(`UPDATE session_inputs
+         SET status = ?, recovery = ?, revision = revision + 1, updatedAt = ?
+       WHERE inputId = ? AND revision = ? AND status = 'interrupted'`,)
         .run(
           params.resolution,
           JSON.stringify({
@@ -1484,14 +1446,12 @@ export class Store {
    */
   claimNextInput(sessionId: string): ClaimResult {
     return this.transaction(() => {
-      const processing = this.db
-        .prepare("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'processing' LIMIT 1")
+      const processing = this.stmt("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'processing' LIMIT 1")
         .get(sessionId) as { inputId: string } | undefined;
       if (processing !== undefined) {
         return { kind: 'busy', inputId: processing.inputId } as ClaimResult;
       }
-      const interrupted = this.db
-        .prepare("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'interrupted' ORDER BY seq LIMIT 1")
+      const interrupted = this.stmt("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'interrupted' ORDER BY seq LIMIT 1")
         .get(sessionId) as { inputId: string } | undefined;
       if (interrupted !== undefined) {
         return {
@@ -1502,15 +1462,12 @@ export class Store {
       }
       let candidate: { inputId: string } | undefined;
       for (;;) {
-        const queued = this.db
-          .prepare(
-            `SELECT i.inputId AS inputId, i.kind AS kind,
-                    t.status AS taskStatus, t.chiefSessionId AS chiefSessionId
-               FROM session_inputs i
-               LEFT JOIN tasks t ON t.id = i.taskId
-              WHERE i.sessionId = ? AND i.status = 'queued'
-              ORDER BY i.seq LIMIT 1`,
-          )
+        const queued = this.stmt(`SELECT i.inputId AS inputId, i.kind AS kind,
+                t.status AS taskStatus, t.chiefSessionId AS chiefSessionId
+           FROM session_inputs i
+           LEFT JOIN tasks t ON t.id = i.taskId
+          WHERE i.sessionId = ? AND i.status = 'queued'
+          ORDER BY i.seq LIMIT 1`,)
           .get(sessionId) as
           | { inputId: string; kind: string; taskStatus: string | null; chiefSessionId: string | null }
           | undefined;
@@ -1526,12 +1483,9 @@ export class Store {
         const chiefTurn =
           queued.chiefSessionId === sessionId && (queued.kind === 'user' || queued.kind === 'system_notice');
         if (ended && !chiefTurn) {
-          this.db
-            .prepare(
-              `UPDATE session_inputs SET status = 'stopped', errorCode = 'TASK_ENDED',
-                 errorMessage = ?, revision = revision + 1, updatedAt = ?
-               WHERE inputId = ? AND status = 'queued'`,
-            )
+          this.stmt(`UPDATE session_inputs SET status = 'stopped', errorCode = 'TASK_ENDED',
+             errorMessage = ?, revision = revision + 1, updatedAt = ?
+           WHERE inputId = ? AND status = 'queued'`,)
             .run(`Task ${queued.taskStatus} before this input could run`, this.clock(), queued.inputId);
           continue;
         }
@@ -1539,22 +1493,18 @@ export class Store {
       }
       // While a chief session coordinates a Task, only that Task's own work is consumable: another
       // topic waits for the Task to end (R3) instead of overtaking it.
-      const currentTask = this.db
-        .prepare('SELECT currentTaskId FROM sessions WHERE id = ?')
+      const currentTask = this.stmt('SELECT currentTaskId FROM sessions WHERE id = ?')
         .get(sessionId) as { currentTaskId: string | null } | undefined;
       if (currentTask !== undefined && currentTask.currentTaskId !== null) {
         // A Task's work plus, when this session is its chief, the chief's own conversation inputs:
         // those are how a paused Task is discussed and resumed, not work the pause holds.
-        const owned = this.db
-          .prepare(
-            `SELECT i.inputId AS inputId,
-                    i.kind IN ('user', 'system_notice')
-                      AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = i.taskId AND t.chiefSessionId = i.sessionId)
-                      AS held
-               FROM session_inputs i
-              WHERE i.sessionId = ? AND i.status = 'queued' AND i.taskId = ?
-              ORDER BY i.seq LIMIT 1`,
-          )
+        const owned = this.stmt(`SELECT i.inputId AS inputId,
+                i.kind IN ('user', 'system_notice')
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = i.taskId AND t.chiefSessionId = i.sessionId)
+                  AS held
+           FROM session_inputs i
+          WHERE i.sessionId = ? AND i.status = 'queued' AND i.taskId = ?
+          ORDER BY i.seq LIMIT 1`,)
           .get(sessionId, currentTask.currentTaskId) as { inputId: string; held: number } | undefined;
         if (owned === undefined) {
           return { kind: 'busy', inputId: candidate.inputId } as ClaimResult;
@@ -1566,15 +1516,12 @@ export class Store {
         }
         candidate = { inputId: owned.inputId };
       }
-      const owner = this.db
-        .prepare(
-          `SELECT t.status AS taskStatus, t.chiefSessionId AS chiefSessionId, i.kind AS kind,
-                  ts.roleId AS roleId, ts.expectedKind AS expectedKind
-           FROM session_inputs i
-           JOIN tasks t ON t.id = i.taskId
-           LEFT JOIN task_sessions ts ON ts.sessionId = i.sessionId AND ts.taskId = i.taskId
-           WHERE i.inputId = ?`,
-        )
+      const owner = this.stmt(`SELECT t.status AS taskStatus, t.chiefSessionId AS chiefSessionId, i.kind AS kind,
+              ts.roleId AS roleId, ts.expectedKind AS expectedKind
+       FROM session_inputs i
+       JOIN tasks t ON t.id = i.taskId
+       LEFT JOIN task_sessions ts ON ts.sessionId = i.sessionId AND ts.taskId = i.taskId
+       WHERE i.inputId = ?`,)
         .get(candidate.inputId) as
         | { taskStatus: string; chiefSessionId: string; kind: InputKind; roleId: string | null; expectedKind: string | null }
         | undefined;
@@ -1615,17 +1562,14 @@ export class Store {
   tryClaimInput(inputId: string): boolean {
     const timestamp = this.clock();
     try {
-      const outcome = this.db
-        .prepare(
-          `UPDATE session_inputs
-              SET status = 'processing', claim = claim + 1, revision = revision + 1,
-                  serverEpoch = ?, deliveryStartedAt = ?, updatedAt = ?
-            WHERE inputId = ? AND status = 'queued'
-              AND NOT EXISTS (
-                SELECT 1 FROM session_inputs running
-                 WHERE running.sessionId = session_inputs.sessionId AND running.status = 'processing'
-              )`,
-        )
+      const outcome = this.stmt(`UPDATE session_inputs
+          SET status = 'processing', claim = claim + 1, revision = revision + 1,
+              serverEpoch = ?, deliveryStartedAt = ?, updatedAt = ?
+        WHERE inputId = ? AND status = 'queued'
+          AND NOT EXISTS (
+            SELECT 1 FROM session_inputs running
+             WHERE running.sessionId = session_inputs.sessionId AND running.status = 'processing'
+          )`,)
         .run(this.serverEpoch, timestamp, timestamp, inputId);
       return outcome.changes === 1;
     } catch (error) {
@@ -1647,13 +1591,10 @@ export class Store {
     /** Delivered boundary, recorded only when the run actually settled. */
     checkpoint?: unknown;
   }): boolean {
-    const outcome = this.db
-      .prepare(
-        `UPDATE session_inputs
-            SET status = ?, revision = revision + 1, errorCode = ?, errorMessage = ?,
-                checkpoint = COALESCE(?, checkpoint), updatedAt = ?
-          WHERE inputId = ? AND status = 'processing' AND revision = ?`,
-      )
+    const outcome = this.stmt(`UPDATE session_inputs
+        SET status = ?, revision = revision + 1, errorCode = ?, errorMessage = ?,
+            checkpoint = COALESCE(?, checkpoint), updatedAt = ?
+      WHERE inputId = ? AND status = 'processing' AND revision = ?`,)
       .run(
         params.status,
         params.errorCode ?? null,
@@ -1700,21 +1641,19 @@ export class Store {
   }): number {
     if (params.entries.length === 0) return 0;
     return this.transaction(() => {
-      const statement = this.db.prepare(
-        `INSERT INTO usage_entries
-           (inputId, projectId, sessionId, taskId, roleId, providerId, modelId, inputTokens, outputTokens,
-            cacheReadTokens, cacheWriteTokens, reasoningTokens, costTotal, responses, startedAt, endedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(inputId, providerId, modelId) DO UPDATE SET
-           inputTokens = excluded.inputTokens,
-           outputTokens = excluded.outputTokens,
-           cacheReadTokens = excluded.cacheReadTokens,
-           cacheWriteTokens = excluded.cacheWriteTokens,
-           reasoningTokens = excluded.reasoningTokens,
-           costTotal = excluded.costTotal,
-           responses = excluded.responses,
-           endedAt = excluded.endedAt`,
-      );
+      const statement = this.stmt(`INSERT INTO usage_entries
+         (inputId, projectId, sessionId, taskId, roleId, providerId, modelId, inputTokens, outputTokens,
+          cacheReadTokens, cacheWriteTokens, reasoningTokens, costTotal, responses, startedAt, endedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(inputId, providerId, modelId) DO UPDATE SET
+         inputTokens = excluded.inputTokens,
+         outputTokens = excluded.outputTokens,
+         cacheReadTokens = excluded.cacheReadTokens,
+         cacheWriteTokens = excluded.cacheWriteTokens,
+         reasoningTokens = excluded.reasoningTokens,
+         costTotal = excluded.costTotal,
+         responses = excluded.responses,
+         endedAt = excluded.endedAt`,);
       let written = 0;
       for (const entry of params.entries) {
         const outcome = statement.run(
@@ -1766,36 +1705,30 @@ export class Store {
         GROUP BY ${column}
         ORDER BY SUM(COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0)) DESC, key`;
 
-    const totals = this.db
-      .prepare(
-        `SELECT COUNT(*) AS rows,
-                SUM(responses) AS responses,
-                SUM(inputTokens) AS inputTokens,
-                SUM(outputTokens) AS outputTokens,
-                SUM(cacheReadTokens) AS cacheReadTokens,
-                SUM(cacheWriteTokens) AS cacheWriteTokens,
-                SUM(reasoningTokens) AS reasoningTokens,
-                SUM(costTotal) AS costTotal
-           FROM usage_entries ${where}`,
-      )
+    const totals = this.stmt(`SELECT COUNT(*) AS rows,
+            SUM(responses) AS responses,
+            SUM(inputTokens) AS inputTokens,
+            SUM(outputTokens) AS outputTokens,
+            SUM(cacheReadTokens) AS cacheReadTokens,
+            SUM(cacheWriteTokens) AS cacheWriteTokens,
+            SUM(reasoningTokens) AS reasoningTokens,
+            SUM(costTotal) AS costTotal
+       FROM usage_entries ${where}`,)
       .get(...args) as Record<string, unknown>;
 
-    const roleRows = this.db.prepare(group('roleId')).all(...args) as Array<Record<string, unknown>>;
-    const modelRows = this.db
-      .prepare(
-        `SELECT providerId, modelId,
-                COUNT(*) AS rows,
-                SUM(responses) AS responses,
-                SUM(inputTokens) AS inputTokens,
-                SUM(outputTokens) AS outputTokens,
-                SUM(cacheReadTokens) AS cacheReadTokens,
-                SUM(cacheWriteTokens) AS cacheWriteTokens,
-                SUM(reasoningTokens) AS reasoningTokens,
-                SUM(costTotal) AS costTotal
-           FROM usage_entries ${where}
-          GROUP BY providerId, modelId
-          ORDER BY SUM(COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0)) DESC, providerId, modelId`,
-      )
+    const roleRows = this.stmt(group('roleId')).all(...args) as Array<Record<string, unknown>>;
+    const modelRows = this.stmt(`SELECT providerId, modelId,
+            COUNT(*) AS rows,
+            SUM(responses) AS responses,
+            SUM(inputTokens) AS inputTokens,
+            SUM(outputTokens) AS outputTokens,
+            SUM(cacheReadTokens) AS cacheReadTokens,
+            SUM(cacheWriteTokens) AS cacheWriteTokens,
+            SUM(reasoningTokens) AS reasoningTokens,
+            SUM(costTotal) AS costTotal
+       FROM usage_entries ${where}
+      GROUP BY providerId, modelId
+      ORDER BY SUM(COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0)) DESC, providerId, modelId`,)
       .all(...args) as Array<Record<string, unknown>>;
 
     return {
@@ -1824,12 +1757,9 @@ export class Store {
           { inputId: params.inputId, status: input.status },
         );
       }
-      const outcome = this.db
-        .prepare(
-          `UPDATE session_inputs
-              SET effectiveConfig = ?, revision = revision + 1, updatedAt = ?
-            WHERE inputId = ? AND status = 'processing' AND revision = ?`,
-        )
+      const outcome = this.stmt(`UPDATE session_inputs
+          SET effectiveConfig = ?, revision = revision + 1, updatedAt = ?
+        WHERE inputId = ? AND status = 'processing' AND revision = ?`,)
         .run(canonical(params.effectiveConfig), this.clock(), params.inputId, input.revision);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'input moved while recording its config', {
@@ -1888,11 +1818,8 @@ export class Store {
       const timestamp = this.clock();
       const models = JSON.stringify(params.models);
       if (existing === undefined) {
-        this.db
-          .prepare(
-            `INSERT INTO providers (providerId, baseUrl, api, name, models, credentialRef, revision, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-          )
+        this.stmt(`INSERT INTO providers (providerId, baseUrl, api, name, models, credentialRef, revision, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,)
           .run(
             params.providerId,
             params.baseUrl,
@@ -1904,11 +1831,8 @@ export class Store {
             timestamp,
           );
       } else {
-        this.db
-          .prepare(
-            `UPDATE providers SET baseUrl = ?, api = ?, name = ?, models = ?, credentialRef = ?, revision = revision + 1, updatedAt = ?
-              WHERE providerId = ? AND revision = ?`,
-          )
+        this.stmt(`UPDATE providers SET baseUrl = ?, api = ?, name = ?, models = ?, credentialRef = ?, revision = revision + 1, updatedAt = ?
+          WHERE providerId = ? AND revision = ?`,)
           .run(
             params.baseUrl,
             params.api ?? null,
@@ -1926,8 +1850,7 @@ export class Store {
 
   /** The global compaction policy. A missing row (should not happen after v16) reads as the default. */
   getCompactionConfig(): CompactionConfigRow {
-    const row = this.db
-      .prepare('SELECT * FROM compaction_settings WHERE id = 1')
+    const row = this.stmt('SELECT * FROM compaction_settings WHERE id = 1')
       .get() as Record<string, unknown> | undefined;
     if (row === undefined) {
       return { auto: true, thresholdPercent: 70, revision: 0, updatedAt: '' };
@@ -1961,19 +1884,13 @@ export class Store {
       }
       const timestamp = this.clock();
       if (existing.revision === 0) {
-        this.db
-          .prepare(
-            `INSERT INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
-             VALUES (1, 1, ?, ?, ?)`,
-          )
+        this.stmt(`INSERT INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
+         VALUES (1, 1, ?, ?, ?)`,)
           .run(params.auto ? 1 : 0, params.thresholdPercent, timestamp);
       } else {
-        this.db
-          .prepare(
-            `UPDATE compaction_settings
-                SET auto = ?, thresholdPercent = ?, revision = revision + 1, updatedAt = ?
-              WHERE id = 1 AND revision = ?`,
-          )
+        this.stmt(`UPDATE compaction_settings
+            SET auto = ?, thresholdPercent = ?, revision = revision + 1, updatedAt = ?
+          WHERE id = 1 AND revision = ?`,)
           .run(params.auto ? 1 : 0, params.thresholdPercent, timestamp, params.expectedRevision);
       }
       return this.getCompactionConfig();
@@ -1981,14 +1898,14 @@ export class Store {
   }
 
   getProvider(providerId: string): ProviderRow | undefined {
-    const row = this.db.prepare('SELECT * FROM providers WHERE providerId = ?').get(providerId) as
+    const row = this.stmt('SELECT * FROM providers WHERE providerId = ?').get(providerId) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toProviderRow(row);
   }
 
   listProviders(): ProviderRow[] {
-    const rows = this.db.prepare('SELECT * FROM providers ORDER BY providerId').all() as Array<Record<string, unknown>>;
+    const rows = this.stmt('SELECT * FROM providers ORDER BY providerId').all() as Array<Record<string, unknown>>;
     return rows.map(toProviderRow);
   }
 
@@ -2027,11 +1944,8 @@ export class Store {
       }
       const timestamp = this.clock();
       if (existing === undefined) {
-        this.db
-          .prepare(
-            `INSERT INTO model_overrides (scope, scopeId, roleId, providerId, modelId, thinkingLevel, revision, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-          )
+        this.stmt(`INSERT INTO model_overrides (scope, scopeId, roleId, providerId, modelId, thinkingLevel, revision, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,)
           .run(
             params.scope,
             params.scopeId,
@@ -2043,11 +1957,8 @@ export class Store {
             timestamp,
           );
       } else {
-        this.db
-          .prepare(
-            `UPDATE model_overrides SET providerId = ?, modelId = ?, thinkingLevel = ?, revision = revision + 1, updatedAt = ?
-              WHERE scope = ? AND scopeId = ? AND roleId = ? AND revision = ?`,
-          )
+        this.stmt(`UPDATE model_overrides SET providerId = ?, modelId = ?, thinkingLevel = ?, revision = revision + 1, updatedAt = ?
+          WHERE scope = ? AND scopeId = ? AND roleId = ? AND revision = ?`,)
           .run(
             params.providerId,
             params.modelId,
@@ -2068,23 +1979,20 @@ export class Store {
   }
 
   getModelOverride(scope: 'role' | 'project', scopeId: string, roleId = ''): ModelOverrideRow | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
+    const row = this.stmt('SELECT * FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
       .get(scope, scopeId, roleId) as Record<string, unknown> | undefined;
     return row === undefined ? undefined : toModelOverrideRow(row);
   }
 
   listModelOverrides(scope: 'role' | 'project'): ModelOverrideRow[] {
-    const rows = this.db
-      .prepare('SELECT * FROM model_overrides WHERE scope = ? ORDER BY scopeId, roleId')
+    const rows = this.stmt('SELECT * FROM model_overrides WHERE scope = ? ORDER BY scopeId, roleId')
       .all(scope) as Array<Record<string, unknown>>;
     return rows.map(toModelOverrideRow);
   }
 
   /** Remove one layer of the model configuration: an unnamed role (or the whole project) falls back. */
   deleteModelOverride(scope: 'role' | 'project', scopeId: string, roleId = ''): boolean {
-    const outcome = this.db
-      .prepare('DELETE FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
+    const outcome = this.stmt('DELETE FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
       .run(scope, scopeId, roleId);
     return outcome.changes > 0;
   }
@@ -2100,23 +2008,17 @@ export class Store {
   scanStartup(): { interrupted: number } {
     return this.transaction(() => {
       const timestamp = this.clock();
-      const outcome = this.db
-        .prepare(
-          `UPDATE session_inputs SET status = 'interrupted', revision = revision + 1, updatedAt = ?
-            WHERE status = 'processing' AND (serverEpoch IS NULL OR serverEpoch <> ?)`,
-        )
+      const outcome = this.stmt(`UPDATE session_inputs SET status = 'interrupted', revision = revision + 1, updatedAt = ?
+        WHERE status = 'processing' AND (serverEpoch IS NULL OR serverEpoch <> ?)`,)
         .run(timestamp, this.serverEpoch);
       // A run that was waiting for an answer died with its process: the question can never reach its
       // caller, so every question of an interrupted foreign run goes stale (M5). This is idempotent,
       // so it also repairs questions left pending by an earlier start that did not classify them.
-      this.db
-        .prepare(
-          `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
-            WHERE state = 'pending' AND inputId IN (
-              SELECT inputId FROM session_inputs
-               WHERE status = 'interrupted' AND (serverEpoch IS NULL OR serverEpoch <> ?)
-            )`,
-        )
+      this.stmt(`UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+        WHERE state = 'pending' AND inputId IN (
+          SELECT inputId FROM session_inputs
+           WHERE status = 'interrupted' AND (serverEpoch IS NULL OR serverEpoch <> ?)
+        )`,)
         .run(timestamp, this.serverEpoch);
       return { interrupted: Number(outcome.changes) };
     });
@@ -2135,14 +2037,11 @@ export class Store {
    * host verifies and closes directly").
    */
   listInterruptedChiefInputs(): Array<{ inputId: string; sessionId: string; revision: number; taskId: string | null }> {
-    const rows = this.db
-      .prepare(
-        `SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.revision AS revision, i.taskId AS taskId
-           FROM session_inputs i
-           JOIN sessions s ON s.id = i.sessionId
-          WHERE i.status = 'interrupted' AND s.roleId = 'chief'
-          ORDER BY i.seq`,
-      )
+    const rows = this.stmt(`SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.revision AS revision, i.taskId AS taskId
+       FROM session_inputs i
+       JOIN sessions s ON s.id = i.sessionId
+      WHERE i.status = 'interrupted' AND s.roleId = 'chief'
+      ORDER BY i.seq`,)
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       inputId: String(row['inputId']),
@@ -2154,13 +2053,10 @@ export class Store {
 
   /** Drop a foreign generation's pending interactions: their calling run no longer exists. */
   staleInteractionsOfInterruptedInputs(): number {
-    const outcome = this.db
-      .prepare(
-        `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
-          WHERE state = 'pending' AND inputId IN (
-            SELECT inputId FROM session_inputs WHERE status = 'interrupted'
-          )`,
-      )
+    const outcome = this.stmt(`UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+      WHERE state = 'pending' AND inputId IN (
+        SELECT inputId FROM session_inputs WHERE status = 'interrupted'
+      )`,)
       .run(this.clock());
     return Number(outcome.changes);
   }
@@ -2173,16 +2069,13 @@ export class Store {
     chiefSessionId: string;
     taskStatus: string;
   }> {
-    const rows = this.db
-      .prepare(
-        `SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.taskId AS taskId,
-                i.errorCode AS errorCode, t.chiefSessionId AS chiefSessionId, t.status AS taskStatus
-           FROM session_inputs i
-           JOIN tasks t ON t.id = i.taskId
-          WHERE i.status = 'interrupted' AND i.taskId IS NOT NULL
-            AND t.status IN ('active', 'waiting', 'paused')
-          ORDER BY i.seq`,
-      )
+    const rows = this.stmt(`SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.taskId AS taskId,
+            i.errorCode AS errorCode, t.chiefSessionId AS chiefSessionId, t.status AS taskStatus
+       FROM session_inputs i
+       JOIN tasks t ON t.id = i.taskId
+      WHERE i.status = 'interrupted' AND i.taskId IS NOT NULL
+        AND t.status IN ('active', 'waiting', 'paused')
+      ORDER BY i.seq`,)
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       inputId: String(row['inputId']),
@@ -2214,22 +2107,16 @@ export class Store {
         };
       }
       if (input.status === 'queued') {
-        this.db
-          .prepare(
-            `UPDATE session_inputs
-                SET status = 'stopped', stopRequestKey = ?, stopReason = ?, revision = revision + 1, updatedAt = ?
-              WHERE inputId = ? AND status = 'queued'`,
-          )
+        this.stmt(`UPDATE session_inputs
+            SET status = 'stopped', stopRequestKey = ?, stopReason = ?, revision = revision + 1, updatedAt = ?
+          WHERE inputId = ? AND status = 'queued'`,)
           .run(params.requestKey, params.reason, timestamp, params.inputId);
         return { status: 'stopped' as InputStatus, stopRequested: true };
       }
       if (input.status === 'processing' || input.status === 'interrupted') {
-        this.db
-          .prepare(
-            `UPDATE session_inputs
-                SET stopRequestKey = ?, stopReason = ?, revision = revision + 1, updatedAt = ?
-              WHERE inputId = ? AND status = ?`,
-          )
+        this.stmt(`UPDATE session_inputs
+            SET stopRequestKey = ?, stopReason = ?, revision = revision + 1, updatedAt = ?
+          WHERE inputId = ? AND status = ?`,)
           .run(params.requestKey, params.reason, timestamp, params.inputId, input.status);
         return { status: input.status, stopRequested: input.status === 'processing' };
       }
@@ -2260,18 +2147,15 @@ export class Store {
     /** The first user input's payload (JSON), the raw material for a derived title. */
     derivedTitle: string | null;
   }> {
-    const rows = this.db
-      .prepare(
-        `SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
-                s.title AS storedTitle, s.channel AS channel, s.archivedAt AS archivedAt,
-                MAX(i.updatedAt) AS lastActivityAt,
-                SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
-                SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
-                SUM(CASE WHEN i.status = 'processing' AND i.stopRequestKey IS NOT NULL THEN 1 ELSE 0 END) AS stopping
-           FROM sessions s LEFT JOIN session_inputs i ON i.sessionId = s.id
-          WHERE s.projectId = ?
-          GROUP BY s.id`,
-      )
+    const rows = this.stmt(`SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
+            s.title AS storedTitle, s.channel AS channel, s.archivedAt AS archivedAt,
+            MAX(i.updatedAt) AS lastActivityAt,
+            SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN i.status = 'processing' AND i.stopRequestKey IS NOT NULL THEN 1 ELSE 0 END) AS stopping
+       FROM sessions s LEFT JOIN session_inputs i ON i.sessionId = s.id
+      WHERE s.projectId = ?
+      GROUP BY s.id`,)
       .all(projectId) as unknown as Array<{
       id: string;
       roleId: string;
@@ -2289,16 +2173,13 @@ export class Store {
     // host instruction, not something the user typed, so it never titles a session: a member row
     // would otherwise read as a chat that starts mid-sentence.
     const titles = new Map<string, string>();
-    const firstInputs = this.db
-      .prepare(
-        `SELECT i.sessionId AS sessionId, i.payload AS payload
-           FROM session_inputs i
-           JOIN (SELECT sessionId AS sid, MIN(seq) AS seq
-                   FROM session_inputs
-                  WHERE kind = 'user' AND projectId = ?
-                  GROUP BY sessionId) f
-             ON f.sid = i.sessionId AND f.seq = i.seq`,
-      )
+    const firstInputs = this.stmt(`SELECT i.sessionId AS sessionId, i.payload AS payload
+       FROM session_inputs i
+       JOIN (SELECT sessionId AS sid, MIN(seq) AS seq
+               FROM session_inputs
+              WHERE kind = 'user' AND projectId = ?
+              GROUP BY sessionId) f
+         ON f.sid = i.sessionId AND f.seq = i.seq`,)
       .all(projectId) as unknown as Array<{ sessionId: string; payload: string }>;
     for (const input of firstInputs) {
       titles.set(input.sessionId, input.payload);
@@ -2328,15 +2209,12 @@ export class Store {
     taskCount: number;
     lastActivityAt: string | null;
   }> {
-    const rows = this.db
-      .prepare(
-        `SELECT p.*,
-                (SELECT COUNT(*) FROM sessions s WHERE s.projectId = p.id) AS sessionCount,
-                (SELECT COUNT(*) FROM tasks t WHERE t.projectId = p.id) AS taskCount,
-                (SELECT MAX(i.updatedAt) FROM session_inputs i WHERE i.projectId = p.id) AS lastActivityAt
-           FROM projects p
-          ORDER BY p.updatedAt DESC, p.id`,
-      )
+    const rows = this.stmt(`SELECT p.*,
+            (SELECT COUNT(*) FROM sessions s WHERE s.projectId = p.id) AS sessionCount,
+            (SELECT COUNT(*) FROM tasks t WHERE t.projectId = p.id) AS taskCount,
+            (SELECT MAX(i.updatedAt) FROM session_inputs i WHERE i.projectId = p.id) AS lastActivityAt
+       FROM projects p
+      ORDER BY p.updatedAt DESC, p.id`,)
       .all() as unknown as Array<Record<string, unknown> & { sessionCount: number; taskCount: number; lastActivityAt: string | null }>;
     return rows.map((row) => ({
       ...toProjectRow(row),
@@ -2347,8 +2225,7 @@ export class Store {
   }
 
   listSessions(): Array<{ id: string; projectId: string; roleId: string; cwd: string; revision: number; updatedAt: string }> {
-    return this.db
-      .prepare('SELECT id, projectId, roleId, cwd, revision, updatedAt FROM sessions ORDER BY id')
+    return this.stmt('SELECT id, projectId, roleId, cwd, revision, updatedAt FROM sessions ORDER BY id')
       .all() as unknown as Array<{
       id: string;
       projectId: string;
@@ -2357,6 +2234,21 @@ export class Store {
       revision: number;
       updatedAt: string;
     }>;
+  }
+
+  /**
+   * Sessions the worker may act on: one holding a queued input to claim, a running one to report
+   * busy, or an interrupted one to report blocked (RECOVERY_REQUIRED). The worker probes only
+   * this set each pass; a session with no such input can only be idle, and re-deriving that per
+   * pass made idle CPU grow with the session table while `notify()` remains the real wake path.
+   */
+  listRunnableSessionIds(): string[] {
+    return (
+      this.stmt(`SELECT DISTINCT sessionId FROM session_inputs
+        WHERE status IN ('queued', 'processing', 'interrupted')
+        ORDER BY sessionId`,)
+        .all() as Array<{ sessionId: string }>
+    ).map((row) => row.sessionId);
   }
 
   getSession(sessionId: string): {
@@ -2372,10 +2264,7 @@ export class Store {
     archivedAt: string | null;
     revision: number;
   } | undefined {
-    return this.db
-      .prepare(
-        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, channel, archivedAt, revision FROM sessions WHERE id = ?',
-      )
+    return this.stmt('SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, channel, archivedAt, revision FROM sessions WHERE id = ?',)
       .get(sessionId) as
       | {
           id: string;
@@ -2395,8 +2284,7 @@ export class Store {
 
   /** The fixed session of an external channel (`mcp`), if the project already has one. */
   getSessionByChannel(projectId: string, channel: string): { id: string; channel: string | null } | undefined {
-    return this.db
-      .prepare('SELECT id, channel FROM sessions WHERE projectId = ? AND channel = ?')
+    return this.stmt('SELECT id, channel FROM sessions WHERE projectId = ? AND channel = ?')
       .get(projectId, channel) as { id: string; channel: string | null } | undefined;
   }
 
@@ -2410,18 +2298,15 @@ export class Store {
     rulesHash?: string;
   }): void {
     const timestamp = this.clock();
-    this.db
-      .prepare(
-        `INSERT INTO session_bindings (sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(sessionId) DO UPDATE SET
-           piFile = excluded.piFile,
-           branchEntryId = excluded.branchEntryId,
-           hasHistory = excluded.hasHistory,
-           configHash = excluded.configHash,
-           rulesHash = excluded.rulesHash,
-           updatedAt = excluded.updatedAt`,
-      )
+    this.stmt(`INSERT INTO session_bindings (sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(sessionId) DO UPDATE SET
+       piFile = excluded.piFile,
+       branchEntryId = excluded.branchEntryId,
+       hasHistory = excluded.hasHistory,
+       configHash = excluded.configHash,
+       rulesHash = excluded.rulesHash,
+       updatedAt = excluded.updatedAt`,)
       .run(
         params.sessionId,
         params.piFile,
@@ -2441,10 +2326,7 @@ export class Store {
     configHash: string | null;
     rulesHash: string | null;
   } | undefined {
-    const row = this.db
-      .prepare(
-        'SELECT sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash FROM session_bindings WHERE sessionId = ?',
-      )
+    const row = this.stmt('SELECT sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash FROM session_bindings WHERE sessionId = ?',)
       .get(sessionId) as
       | {
           sessionId: string;
@@ -2459,22 +2341,21 @@ export class Store {
   }
 
   getInput(inputId: string): InputRow | undefined {
-    return this.db.prepare('SELECT * FROM session_inputs WHERE inputId = ?').get(inputId) as
+    return this.stmt('SELECT * FROM session_inputs WHERE inputId = ?').get(inputId) as
       | InputRow
       | undefined;
   }
 
   listInputs(sessionId: string): InputRow[] {
-    return this.db
-      .prepare('SELECT * FROM session_inputs WHERE sessionId = ? ORDER BY seq')
+    return this.stmt('SELECT * FROM session_inputs WHERE sessionId = ? ORDER BY seq')
       .all(sessionId) as unknown as InputRow[];
   }
 
   pragmas(): { journalMode: string; synchronous: number; foreignKeys: number; userVersion: number } {
-    const journal = this.db.prepare('PRAGMA journal_mode').get() as { journal_mode: string };
-    const synchronous = this.db.prepare('PRAGMA synchronous').get() as { synchronous: number };
-    const foreignKeys = this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number };
-    const userVersion = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+    const journal = this.stmt('PRAGMA journal_mode').get() as { journal_mode: string };
+    const synchronous = this.stmt('PRAGMA synchronous').get() as { synchronous: number };
+    const foreignKeys = this.stmt('PRAGMA foreign_keys').get() as { foreign_keys: number };
+    const userVersion = this.stmt('PRAGMA user_version').get() as { user_version: number };
     return {
       journalMode: journal.journal_mode,
       synchronous: synchronous.synchronous,
@@ -2524,15 +2405,12 @@ export class Store {
       }
       const timestamp = this.clock();
       try {
-        this.db
-          .prepare(
-            `INSERT INTO tasks
-               (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
-                workKind, flowVersion, reworkCount, requiresTest, goal, scope, acceptanceRefs, basisRefs,
-                planRef, authorizationRefs, phase, currentSessionIds, status, revision, summary,
-                sourceInputId, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?)`,
-          )
+        this.stmt(`INSERT INTO tasks
+           (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
+            workKind, flowVersion, reworkCount, requiresTest, goal, scope, acceptanceRefs, basisRefs,
+            planRef, authorizationRefs, phase, currentSessionIds, status, revision, summary,
+            sourceInputId, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?)`,)
           .run(
             params.id,
             params.projectId,
@@ -2580,8 +2458,7 @@ export class Store {
       if (backlogIds.length > 0) {
         this.claimBacklogItems(backlogIds, params.id);
       }
-      this.db
-        .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+      this.stmt('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(params.id, timestamp, params.chiefSessionId);
       return this.requireTask(params.id);
     });
@@ -2594,16 +2471,13 @@ export class Store {
    */
   private claimBacklogItems(ids: readonly string[], taskId: string): void {
     const placeholders = ids.map(() => '?').join(', ');
-    const row = this.db
-      .prepare(
-        `SELECT t.id AS taskId, t.chiefSessionId AS chiefSessionId, t.status AS status,
-                j.value AS backlogId
-           FROM tasks t, json_each(t.backlogIds) j
-          WHERE t.id <> ? AND t.type = 'write'
-            AND t.status IN ('active', 'waiting', 'pausing', 'paused', 'cancelling')
-            AND j.value IN (${placeholders})
-          LIMIT 1`,
-      )
+    const row = this.stmt(`SELECT t.id AS taskId, t.chiefSessionId AS chiefSessionId, t.status AS status,
+            j.value AS backlogId
+       FROM tasks t, json_each(t.backlogIds) j
+      WHERE t.id <> ? AND t.type = 'write'
+        AND t.status IN ('active', 'waiting', 'pausing', 'paused', 'cancelling')
+        AND j.value IN (${placeholders})
+      LIMIT 1`,)
       .get(taskId, ...ids) as
       | { taskId: string; chiefSessionId: string; status: string; backlogId: string }
       | undefined;
@@ -2618,7 +2492,7 @@ export class Store {
   }
 
   getTask(taskId: string): TaskRow | undefined {
-    const row = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as
+    const row = this.stmt('SELECT * FROM tasks WHERE id = ?').get(taskId) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toTaskRow(row);
@@ -2626,8 +2500,7 @@ export class Store {
 
   listTasks(projectId: string): TaskRow[] {
     return (
-      this.db
-        .prepare('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt, id')
+      this.stmt('SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt, id')
         .all(projectId) as unknown as Array<Record<string, unknown>>
     ).map(toTaskRow);
   }
@@ -2706,17 +2579,14 @@ export class Store {
         }
       }
       const timestamp = this.clock();
-      const outcome = this.db
-        .prepare(
-          `UPDATE tasks SET
-             phase = ?, currentSessionIds = ?, status = ?, summary = ?, nextStep = ?, blockReason = ?,
-             planRef = COALESCE(?, planRef), goal = COALESCE(?, goal), scope = COALESCE(?, scope),
-             acceptanceRefs = COALESCE(?, acceptanceRefs), basisRefs = COALESCE(?, basisRefs),
-             requiresTest = COALESCE(?, requiresTest),
-             reworkCount = reworkCount + ?,
-             revision = revision + 1, updatedAt = ?
-           WHERE id = ?`,
-        )
+      const outcome = this.stmt(`UPDATE tasks SET
+         phase = ?, currentSessionIds = ?, status = ?, summary = ?, nextStep = ?, blockReason = ?,
+         planRef = COALESCE(?, planRef), goal = COALESCE(?, goal), scope = COALESCE(?, scope),
+         acceptanceRefs = COALESCE(?, acceptanceRefs), basisRefs = COALESCE(?, basisRefs),
+         requiresTest = COALESCE(?, requiresTest),
+         reworkCount = reworkCount + ?,
+         revision = revision + 1, updatedAt = ?
+       WHERE id = ?`,)
         .run(
           params.phase ?? task.phase,
           params.phase === undefined ? canonical(task.currentSessionIds) : '[]',
@@ -2856,19 +2726,13 @@ export class Store {
         return { ok: true, task } as const;
       }
       const timestamp = this.clock();
-      const outcome = this.db
-        .prepare(
-          `UPDATE tasks SET status = 'completed', completionResultId = ?, revision = revision + 1, updatedAt = ?
-             WHERE id = ?`,
-        )
+      const outcome = this.stmt(`UPDATE tasks SET status = 'completed', completionResultId = ?, revision = revision + 1, updatedAt = ?
+         WHERE id = ?`,)
         .run(params.completionResultId, timestamp, params.taskId);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'the Task could not be completed', { taskId: params.taskId });
       }
-      this.db
-        .prepare(
-          'UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?',
-        )
+      this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?',)
         .run(timestamp, task.chiefSessionId);
       return { ok: true, task: this.requireTask(params.taskId) };
     });
@@ -2938,8 +2802,7 @@ export class Store {
           kind: params.kind,
         });
       }
-      const existing = this.db
-        .prepare('SELECT taskId FROM results WHERE resultId = ?')
+      const existing = this.stmt('SELECT taskId FROM results WHERE resultId = ?')
         .get(params.resultId) as { taskId: string } | undefined;
       if (existing !== undefined) {
         throw new StoreError('REQUEST_CONFLICT', 'this resultId is already recorded', {
@@ -2947,13 +2810,10 @@ export class Store {
           taskId: existing.taskId,
         });
       }
-      this.db
-        .prepare(
-          `INSERT INTO results
-             (resultId, taskId, sessionId, inputId, roleId, kind, summary, verdict, deliveryState, bodyRef,
-              basisRefs, checks, settlement, createdAt, serverEpoch)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
+      this.stmt(`INSERT INTO results
+         (resultId, taskId, sessionId, inputId, roleId, kind, summary, verdict, deliveryState, bodyRef,
+          basisRefs, checks, settlement, createdAt, serverEpoch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,)
         .run(
           params.resultId,
           params.taskId,
@@ -2976,7 +2836,7 @@ export class Store {
   }
 
   getResult(resultId: string): ResultRow | undefined {
-    const row = this.db.prepare('SELECT * FROM results WHERE resultId = ?').get(resultId) as
+    const row = this.stmt('SELECT * FROM results WHERE resultId = ?').get(resultId) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toResultRow(row);
@@ -2992,8 +2852,7 @@ export class Store {
 
   /** All results of a Task, oldest first. */
   listTaskResults(taskId: string): ResultRow[] {
-    const rows = this.db
-      .prepare('SELECT * FROM results WHERE taskId = ? ORDER BY createdAt, resultId')
+    const rows = this.stmt('SELECT * FROM results WHERE taskId = ? ORDER BY createdAt, resultId')
       .all(taskId) as Record<string, unknown>[];
     return rows.map((row) => toResultRow(row));
   }
@@ -3004,8 +2863,7 @@ export class Store {
       return [];
     }
     const placeholders = inputIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare(`SELECT * FROM results WHERE inputId IN (${placeholders}) ORDER BY createdAt, resultId`)
+    const rows = this.stmt(`SELECT * FROM results WHERE inputId IN (${placeholders}) ORDER BY createdAt, resultId`)
       .all(...inputIds) as Record<string, unknown>[];
     return rows.map((row) => toResultRow(row));
   }
@@ -3021,15 +2879,12 @@ export class Store {
     receipt?: string;
   }): void {
     const timestamp = this.clock();
-    this.db
-      .prepare(
-        `INSERT INTO file_saves (requestKey, target, expectedVersion, contentHash, content, state, receipt, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(requestKey) DO UPDATE SET
-           state = excluded.state, receipt = excluded.receipt,
-           contentHash = excluded.contentHash, content = excluded.content,
-           expectedVersion = excluded.expectedVersion, updatedAt = excluded.updatedAt`,
-      )
+    this.stmt(`INSERT INTO file_saves (requestKey, target, expectedVersion, contentHash, content, state, receipt, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(requestKey) DO UPDATE SET
+       state = excluded.state, receipt = excluded.receipt,
+       contentHash = excluded.contentHash, content = excluded.content,
+       expectedVersion = excluded.expectedVersion, updatedAt = excluded.updatedAt`,)
       .run(
         params.requestKey,
         params.target,
@@ -3044,8 +2899,7 @@ export class Store {
   }
 
   getFileSave(requestKey: string): FileSaveRow | undefined {
-    return this.db
-      .prepare('SELECT requestKey, target, expectedVersion, contentHash, content, state, receipt FROM file_saves WHERE requestKey = ?')
+    return this.stmt('SELECT requestKey, target, expectedVersion, contentHash, content, state, receipt FROM file_saves WHERE requestKey = ?')
       .get(requestKey) as FileSaveRow | undefined;
   }
 
@@ -3112,16 +2966,12 @@ export class Store {
           kind: 'delegation',
           payload: member.inputPayload,
         });
-        this.db
-          .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        this.stmt('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
           .run(params.taskId, timestamp, member.sessionId);
-        this.db
-          .prepare(
-            `INSERT INTO task_sessions
-               (sessionId, taskId, roleId, specialization, phase, label, instructions, refs,
-                dependencies, expectedKind, writeScope, workspaceRef, currentInputId, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
+        this.stmt(`INSERT INTO task_sessions
+           (sessionId, taskId, roleId, specialization, phase, label, instructions, refs,
+            dependencies, expectedKind, writeScope, workspaceRef, currentInputId, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,)
           .run(
             member.sessionId,
             params.taskId,
@@ -3152,10 +3002,7 @@ export class Store {
           ...(params.continuations ?? []).map((entry) => entry.sessionId),
         ]),
       ];
-      this.db
-        .prepare(
-          'UPDATE tasks SET currentSessionIds = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',
-        )
+      this.stmt('UPDATE tasks SET currentSessionIds = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',)
         .run(canonical(currentSessionIds), timestamp, params.taskId);
       return created;
     });
@@ -3172,11 +3019,8 @@ export class Store {
     return this.transaction(() => {
       const member = this.requireTaskSession(params.sessionId);
       const timestamp = this.clock();
-      this.db
-        .prepare(
-          `UPDATE task_sessions SET instructions = ?, refs = ?, dependencies = ?, currentInputId = ?, updatedAt = ?
-             WHERE sessionId = ?`,
-        )
+      this.stmt(`UPDATE task_sessions SET instructions = ?, refs = ?, dependencies = ?, currentInputId = ?, updatedAt = ?
+         WHERE sessionId = ?`,)
         .run(
           params.instructions,
           canonical(params.refs),
@@ -3201,8 +3045,7 @@ export class Store {
   }
 
   getTaskSession(sessionId: string): TaskSessionRow | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM task_sessions WHERE sessionId = ?')
+    const row = this.stmt('SELECT * FROM task_sessions WHERE sessionId = ?')
       .get(sessionId) as Record<string, unknown> | undefined;
     return row === undefined ? undefined : toTaskSessionRow(row);
   }
@@ -3214,8 +3057,7 @@ export class Store {
    */
   listTaskSessions(taskId: string): TaskSessionRow[] {
     return (
-      this.db
-        .prepare('SELECT * FROM task_sessions WHERE taskId = ? ORDER BY updatedAt, createdAt, sessionId')
+      this.stmt('SELECT * FROM task_sessions WHERE taskId = ? ORDER BY updatedAt, createdAt, sessionId')
         .all(taskId) as unknown as Array<Record<string, unknown>>
     ).map(toTaskSessionRow);
   }
@@ -3261,21 +3103,16 @@ export class Store {
             : unfinished > 0
               ? 'cancelling'
               : 'cancelled';
-      this.db
-        .prepare('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+      this.stmt('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
         .run(next, this.clock(), params.taskId, task.revision);
       if (next === 'cancelled') {
         // The Task is over: only completion, cancellation or a safe handover free the chief's slot.
-        this.db
-          .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
           .run(this.clock(), task.chiefSessionId);
       }
       if (next === 'active') {
         // A paused Task keeps the association; re-bind defensively so a reloaded row finds its Task.
-        this.db
-          .prepare(
-            'UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND (currentTaskId IS NULL OR currentTaskId = ?)',
-          )
+        this.stmt('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND (currentTaskId IS NULL OR currentTaskId = ?)',)
           .run(params.taskId, this.clock(), task.chiefSessionId, params.taskId);
       }
       return this.requireTask(params.taskId);
@@ -3287,13 +3124,10 @@ export class Store {
    * A controlled Task only reaches its final status once this is zero.
    */
   private unfinishedMemberWork(taskId: string): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS unfinished
-         FROM task_sessions ts
-         JOIN session_inputs i ON i.inputId = ts.currentInputId
-         WHERE ts.taskId = ? AND i.status IN ('queued', 'processing', 'stopping')`,
-      )
+    const row = this.stmt(`SELECT COUNT(*) AS unfinished
+     FROM task_sessions ts
+     JOIN session_inputs i ON i.inputId = ts.currentInputId
+     WHERE ts.taskId = ? AND i.status IN ('queued', 'processing', 'stopping')`,)
       .get(taskId) as { unfinished: number };
     return row.unfinished;
   }
@@ -3317,12 +3151,10 @@ export class Store {
         });
       }
       const timestamp = this.clock();
-      this.db
-        .prepare('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+      this.stmt('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(params.status, timestamp, params.taskId);
       if (params.status === 'cancelled') {
-        this.db
-          .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
           .run(timestamp, task.chiefSessionId);
       }
       return this.requireTask(params.taskId);
@@ -3381,16 +3213,11 @@ export class Store {
         });
       }
       const timestamp = this.clock();
-      this.db
-        .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+      this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(timestamp, task.chiefSessionId);
-      this.db
-        .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+      this.stmt('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(params.taskId, timestamp, params.chiefSessionId);
-      this.db
-        .prepare(
-          'UPDATE tasks SET chiefSessionId = ?, ownerEpoch = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',
-        )
+      this.stmt('UPDATE tasks SET chiefSessionId = ?, ownerEpoch = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',)
         .run(params.chiefSessionId, this.epoch, timestamp, params.taskId);
       return this.requireTask(params.taskId);
     });
@@ -3452,8 +3279,7 @@ export class Store {
   private migrateV3ToV4(): void {
     this.transaction(() => {
       this.db.exec(V4_DDL);
-      const column = this.db
-        .prepare("SELECT COUNT(*) AS present FROM pragma_table_info('tasks') WHERE name = 'candidate'")
+      const column = this.stmt("SELECT COUNT(*) AS present FROM pragma_table_info('tasks') WHERE name = 'candidate'")
         .get() as { present: number };
       if (column.present === 0) {
         this.db.exec('ALTER TABLE tasks ADD COLUMN candidate TEXT');
@@ -3478,8 +3304,7 @@ export class Store {
 
   private migrateV5ToV6(): void {
     this.transaction(() => {
-      const column = this.db
-        .prepare("SELECT COUNT(*) AS present FROM pragma_table_info('session_inputs') WHERE name = 'recovery'")
+      const column = this.stmt("SELECT COUNT(*) AS present FROM pragma_table_info('session_inputs') WHERE name = 'recovery'")
         .get() as { present: number };
       if (column.present === 0) {
         this.db.exec(V6_DDL);
@@ -3563,11 +3388,8 @@ export class Store {
   private migrateV15ToV16(): void {
     this.transaction(() => {
       this.db.exec(V16_DDL);
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
-           VALUES (1, 1, 1, 70, ?)`,
-        )
+      this.stmt(`INSERT OR IGNORE INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
+       VALUES (1, 1, 1, 70, ?)`,)
         .run(this.clock());
       this.db.exec('PRAGMA user_version = 16;');
     });
@@ -3591,7 +3413,7 @@ export class Store {
       this.addColumn('tasks', 'workKind', "TEXT NOT NULL DEFAULT 'implement'");
       this.addColumn('tasks', 'flowVersion', 'INTEGER NOT NULL DEFAULT 0');
       this.addColumn('tasks', 'reworkCount', 'INTEGER NOT NULL DEFAULT 0');
-      this.db.prepare("UPDATE tasks SET workKind = 'investigate' WHERE type = 'read'").run();
+      this.stmt("UPDATE tasks SET workKind = 'investigate' WHERE type = 'read'").run();
       this.db.exec('PRAGMA user_version = 18;');
     });
   }
@@ -3671,8 +3493,7 @@ export class Store {
   }
 
   private hasColumn(table: string, column: string): boolean {
-    const row = this.db
-      .prepare(`SELECT COUNT(*) AS present FROM pragma_table_info('${table}') WHERE name = ?`)
+    const row = this.stmt(`SELECT COUNT(*) AS present FROM pragma_table_info('${table}') WHERE name = ?`)
       .get(column) as { present: number };
     return row.present > 0;
   }

@@ -5,7 +5,7 @@
  * Availability is checked against the SDK's own credential resolution, so an unusable model blocks
  * the input instead of silently falling back to another provider.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createAgentSession,
@@ -85,6 +85,13 @@ export class PiRuntimeFactory {
   private modelRuntime: ModelRuntime | undefined;
   /** The in-flight creation: two sessions starting together must share one runtime. */
   private runtimePromise: Promise<ModelRuntime> | undefined;
+  /**
+   * Change mark of the three config files a refresh re-reads (R5: models.json, auth.json,
+   * models-store.json). `isAvailable` answers from the SDK's in-memory availability snapshot
+   * and refreshes only when this stamp moves; the full pass re-resolves credentials for every
+   * provider and must not run once per claim probe.
+   */
+  private availableStamp: string | undefined;
 
   constructor(defaults: RuntimeDefaults) {
     this.defaults = defaults;
@@ -119,16 +126,43 @@ export class PiRuntimeFactory {
    */
   async reload(): Promise<void> {
     const runtime = await this.runtime();
+    // Stamp before the refresh and assign after: a file that changes during the refresh window
+    // must leave the recorded stamp behind the snapshot, so the next availability answer re-reads
+    // instead of trusting a fresh stamp over stale content (same order as isAvailable).
+    const stamp = this.stampOf();
     await runtime.refresh({ allowNetwork: false });
+    this.availableStamp = stamp;
   }
 
-  /** True when the SDK reports the selection as usable (credential resolvable, model known). */
+  /**
+   * True when the SDK reports the selection as usable (credential resolvable, model known).
+   * Answered from the availability snapshot; a config file change (mtime+size) is the only thing
+   * that triggers one `refresh` first, so a hand edit still reaches the next queued input while a
+   * quiet disk costs no credential pass at all.
+   */
   async isAvailable(selection: ModelSelection): Promise<boolean> {
     const runtime = await this.runtime();
-    const available = await runtime.getAvailable();
+    const stamp = this.stampOf();
+    if (this.availableStamp !== stamp) {
+      await runtime.refresh({ allowNetwork: false });
+      this.availableStamp = stamp;
+    }
+    const available = runtime.getAvailableSnapshot();
     return available.some(
       (model) => model.provider === selection.providerId && model.id === selection.modelId,
     );
+  }
+
+  private stampOf(): string {
+    const mark = (path: string): string => {
+      const info = statSync(path, { throwIfNoEntry: false });
+      return info === undefined ? 'absent' : `${info.mtimeMs}:${info.size}`;
+    };
+    return [
+      mark(join(this.defaults.agentDir, 'models.json')),
+      mark(join(this.defaults.agentDir, 'auth.json')),
+      mark(join(this.defaults.agentDir, 'models-store.json')),
+    ].join('/');
   }
 
   /**
