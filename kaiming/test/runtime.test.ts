@@ -11,6 +11,7 @@ import { assembleSystemPrompt, loadPromptBodies } from '../src/runtime/prompt-as
 import { SessionRegistry } from '../src/runtime/registry.ts';
 import { InputRunner, boundaryPersistedOnDisk, type RunOutcome } from '../src/runtime/runner.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
+import { REPORT_FAILURE_LIMIT, REPORT_RETRY_EXHAUSTED } from '../src/runtime/model-output-guard.ts';
 
 /** The role prompts the server ships (docs/technicalnew/prompts). */
 const PROMPT_DIR = join(
@@ -1874,6 +1875,130 @@ describe('input runner', () => {
     expect(h.store.resultsForInputs(['i-review-no-report'])).toEqual([]);
     expect(h.store.getTaskSession('s-review-no-report')?.currentInputId).toBe('i-review-no-report');
   }, 30_000);
+
+  it('terminates a member run after five failed report attempts, one corrective turn, and five more', async () => {
+    // The 2026-11-13 settler incident, replayed with the stub model: every agent_report call fails
+    // schema validation (missing body). The budget is 5 failures, one hidden corrective turn, then
+    // 5 more — a cause-specific terminal state instead of an unbounded loop.
+    const bad = JSON.stringify({ summary: 's' });
+    const h = await harness({
+      replies: Array.from({ length: REPORT_FAILURE_LIMIT * 2 }, () => ({
+        kind: 'tool_calls' as const,
+        calls: [{ name: 'agent_report', arguments: bad }],
+      })),
+    });
+    const task = h.store.createTask({
+      id: 't-ledger',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'deliver the change',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'develop' });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-ledger',
+          taskId: task.id,
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'implement',
+          instructions: 'do the work',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          inputId: 'i-ledger',
+          inputPayload: { content: [{ type: 'text', text: 'do the work' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-ledger');
+
+    expect(outcome.kind).toBe('failed');
+    expect(h.store.getInput('i-ledger')).toMatchObject({ status: 'failed', errorCode: REPORT_RETRY_EXHAUSTED });
+    const binding = h.store.getSessionBinding('s-ledger');
+    const history = readFileSync(binding?.piFile ?? '', 'utf8');
+    expect(history.match(/kaiming\.model-output-correction/g) ?? []).toHaveLength(1);
+    // Ten failed attempts in the transcript: the budget, not an unbounded loop.
+    expect(history.match(/"toolName":"agent_report"/g) ?? []).toHaveLength(REPORT_FAILURE_LIMIT * 2);
+  }, 60_000);
+
+  it('completes when the report lands after the corrective turn (the 17:32 calibration case)', async () => {
+    // The healthy boundary observed live: five failed attempts, the corrective nudge, then a valid
+    // report. A trip must not kill a run that can still deliver.
+    const bad = JSON.stringify({ summary: 's' });
+    const good = JSON.stringify({
+      summary: 'the reset flow exists but has no test',
+      body: '# investigation\n\nfound an untested reset path\n',
+      checks: [{ name: 'read the sources', status: 'passed' }],
+    });
+    const h = await harness({
+      replies: [
+        ...Array.from({ length: REPORT_FAILURE_LIMIT }, () => ({
+          kind: 'tool_calls' as const,
+          calls: [{ name: 'agent_report', arguments: bad }],
+        })),
+        { kind: 'tool_calls' as const, calls: [{ name: 'agent_report', arguments: good }] },
+        // The stub repeats its last reply forever; end the turn with plain text after the report.
+        { kind: 'text', text: '报告已交付。' },
+      ],
+    });
+    const task = h.store.createTask({
+      id: 't-ledger-ok',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'deliver the change',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'develop' });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-ledger-ok',
+          taskId: task.id,
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'implement',
+          instructions: 'do the work',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          inputId: 'i-ledger-ok',
+          inputPayload: { content: [{ type: 'text', text: 'do the work' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-ledger-ok');
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-ledger-ok')).toMatchObject({ status: 'completed' });
+    expect(h.store.resultsForInputs(['i-ledger-ok'])).toHaveLength(1);
+    const binding = h.store.getSessionBinding('s-ledger-ok');
+    const history = readFileSync(binding?.piFile ?? '', 'utf8');
+    expect(history.match(/kaiming\.model-output-correction/g) ?? []).toHaveLength(1);
+    // Five failures, then the recovery: the corrective nudge did not consume the run.
+    expect(history.match(/"toolName":"agent_report"/g) ?? []).toHaveLength(REPORT_FAILURE_LIMIT + 1);
+  }, 60_000);
 
   it('lets an investigator deliver a read-only report inside a write Task', async () => {
     const createArgs = JSON.stringify({

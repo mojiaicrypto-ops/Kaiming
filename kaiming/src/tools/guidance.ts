@@ -140,11 +140,22 @@ export function guidanceFor(
     );
     if (missingReports.length > 0) {
       for (const entry of missingReports) {
-        actions.push({
-          action: `task(op=dispatch, sessions=[{sessionId: ${entry.member.sessionId}, instructions: '<submit the formal ${entry.member.expectedKind} report from the work you already completed; do not redo the work>'}])`,
-          op: 'dispatch',
-          reason: `${entry.member.sessionId} ended without its formal ${entry.member.expectedKind} report${entry.errorCode === null ? '' : ` (${entry.errorCode})`}; continue that Session instead of dispatching a replacement`,
-        });
+        if (entry.errorCode === 'REPORT_RETRY_EXHAUSTED') {
+          // The member's model degenerated repeatedly on this Session: its history carries the
+          // failed attempts, so continuing it replays the poison (observed 2026-11-13: a continued
+          // session re-degenerated on its first tool call while a fresh session delivered in 100s).
+          actions.push({
+            action: `task(op=dispatch, sessions=[{roleId: ${entry.member.roleId}, instructions: '<deliver the formal ${entry.member.expectedKind} report for this step from the recorded work; do not reuse ${entry.member.sessionId}, its model output degenerated repeatedly>'}])`,
+            op: 'dispatch',
+            reason: `${entry.member.sessionId} exhausted the report retry budget and delivered no ${entry.member.expectedKind} report; dispatch a fresh session instead of continuing this one`,
+          });
+        } else {
+          actions.push({
+            action: `task(op=dispatch, sessions=[{sessionId: ${entry.member.sessionId}, instructions: '<submit the formal ${entry.member.expectedKind} report from the work you already completed; do not redo the work>'}])`,
+            op: 'dispatch',
+            reason: `${entry.member.sessionId} ended without its formal ${entry.member.expectedKind} report${entry.errorCode === null ? '' : ` (${entry.errorCode})`}; continue that Session instead of dispatching a replacement`,
+          });
+        }
       }
       for (const entry of missingReports) {
         gaps.push(

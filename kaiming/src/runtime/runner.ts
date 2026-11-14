@@ -32,7 +32,12 @@ import { formatDocumentText } from './document-text.ts';
 import { compactionDue } from './compaction-policy.ts';
 import { readDocument, readImage } from '../server/attachments.ts';
 import { createRawQuestionRecovery } from './raw-question.ts';
-import { ModelOutputGuard, MODEL_OUTPUT_CORRUPTED, MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE } from './model-output-guard.ts';
+import {
+  ModelOutputGuard,
+  REPORT_RETRY_EXHAUSTED,
+  MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE,
+  createModelOutputGuardExtension,
+} from './model-output-guard.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
@@ -171,6 +176,12 @@ export class InputRunner {
    * cannot freeze the next run's windows.
    */
   private readonly hostWaits = new Map<string, number>();
+  /**
+   * The active input's model-output guard per session. The registry reuses a Pi instance across
+   * inputs without reinstalling extensions, so the guard bridge resolves the *current* input's
+   * guard through this map; the state itself is per input and dies with the run.
+   */
+  private readonly activeOutputGuards = new Map<string, ModelOutputGuard>();
   private hostWaitKey(sessionId: string): string {
     return `${sessionId}\u0000${this.liveRuns.get(sessionId)?.inputId ?? ''}`;
   }
@@ -240,9 +251,10 @@ export class InputRunner {
   }
 
   /**
-   * One corrective turn after the stream guard discards a degenerate response. The hidden custom
-   * message becomes user context for the model but never a browser bubble; a second fault is left
-   * for the terminal classifier, so a broken provider cannot retry forever.
+   * One corrective turn after a guard fault: a discarded degenerate response, or the report retry
+   * budget tripping. The hidden custom message becomes user context for the model but never a
+   * browser bubble; the report streak restarts with it, and a second fault is left for the
+   * terminal classifier, so a broken provider cannot retry forever.
    */
   private async recoverModelOutput(
     handle: PiSessionHandle,
@@ -256,6 +268,8 @@ export class InputRunner {
     if (live !== undefined && live.stopRequestKey !== null) return;
     guard.retryUsed = true;
     guard.fault = undefined;
+    // The corrective turn starts a fresh report budget: N failures after it terminate the input.
+    guard.resetReportStreak();
     await handle.session.waitForIdle();
     this.lastEventAt.set(sessionId, Date.now());
     await runWithWatchdog({
@@ -266,7 +280,10 @@ export class InputRunner {
             content: [
               {
                 type: 'text',
-                text: `Your previous response was discarded as degenerate or malformed: ${fault.detail}. Do not repeat it. Reissue only a valid JSON tool call in the provider's declared format. For a report, keep the body under 8 KB: cite log paths and counts; do not paste full logs.`,
+                text:
+                  fault.code === REPORT_RETRY_EXHAUSTED
+                    ? `Your report attempts keep failing: ${fault.detail}. Reissue exactly one agent_report tool call with valid JSON arguments: both summary and body are required strings; keep the body under 8 KB and do not repeat the failed arguments.`
+                    : `Your previous response was discarded as degenerate or malformed: ${fault.detail}. Do not repeat it. Reissue only a valid JSON tool call in the provider's declared format. For a report, keep the body under 8 KB: cite log paths and counts; do not paste full logs.`,
               },
             ],
             display: false,
@@ -691,7 +708,7 @@ export class InputRunner {
           // Always installed: the model's file tools stay inside the project (and never reach the
           // server's private storage); shell commands keep their own deletion gate.
           extensionFactories: [
-            modelGuard.extension,
+            createModelOutputGuardExtension(() => this.activeOutputGuards.get(sessionId)),
             createRawQuestionRecovery({
               bridge: this.interactions,
               sessionId,
@@ -722,6 +739,9 @@ export class InputRunner {
         },
         config,
       );
+      // The bridge resolves this per-input guard; registration precedes the first event, and the
+      // small finally below removes it together with the run.
+      this.activeOutputGuards.set(sessionId, modelGuard);
 
       // Bind the interaction adapter: without a bound uiContext ctx.hasUI is false and the model
       // cannot ask anything (R4/M5). The adapter is a plain object on purpose.
@@ -794,12 +814,21 @@ export class InputRunner {
         // fires for would be writes with nothing to add.
         if (event.type === 'message_end' && event.message.role === 'assistant') flushUsage();
       });
+      // Report-retry ledger: every toolResult message feeds the per-input guard; a tripped budget
+      // aborts the run so the corrective turn (or the terminal classification) can take over. The
+      // subscription is per input, so counting stays per input even when the registry reuses the
+      // Pi instance and its older extension bridge.
+      const stopReportLedger = handle.session.subscribe((event) => {
+        if (modelGuard.observeEvent(event)) void handle.session.abort();
+      });
       try {
         await this.promptWithWatchdog(handle, sessionId, promptText, images);
         await this.recoverModelOutput(handle, sessionId, modelGuard, input.inputId);
       } finally {
         // Also the path of a failed or stopped run: the responses that did complete were paid for.
         stopWatchingUsage();
+        stopReportLedger();
+        if (this.activeOutputGuards.get(sessionId) === modelGuard) this.activeOutputGuards.delete(sessionId);
         flushUsage();
       }
 
@@ -840,8 +869,11 @@ export class InputRunner {
         detail = stopReason === 'error' ? 'run was aborted as requested' : 'run stopped on request';
       } else if (modelGuard.fault !== undefined) {
         status = 'failed';
-        errorCode = MODEL_OUTPUT_CORRUPTED;
-        detail = `model output discarded: ${modelGuard.fault.detail}`;
+        errorCode = modelGuard.fault.code;
+        detail =
+          modelGuard.fault.code === REPORT_RETRY_EXHAUSTED
+            ? `report retry budget exhausted: ${modelGuard.fault.detail}`
+            : `model output discarded: ${modelGuard.fault.detail}`;
       } else if (stopReason === 'error') {
         status = 'failed';
         errorCode = 'MODEL_ERROR';

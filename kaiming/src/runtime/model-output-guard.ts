@@ -1,15 +1,26 @@
 /**
- * Model-output degeneration guard (first phase).
+ * Model-output guard: structural bounds on a member run's report attempts.
  *
- * Two failure classes are handled here, without a provider adapter:
- *  - a stream that starts repeating closing tags or a suffix pattern long before the provider's
- *    output limit (the 108 KB `agent_report` incident was about 8 KB of report plus repeated
- *    `</invoke>`/`</function>`/`</v8>` tags);
- *  - a completed tool call whose arguments are non-object or exceed the tool's size policy. A
- *    provider's native XML/DSML is not parsed or repaired: unsupported protocol is an error.
+ * Two failure classes, both decided by structure (tool name, isError bit, counts) and never by the
+ * shape of the model's text:
+ *  - a streamed tool-argument buffer exceeding the hard size cap (the 11-12 incident reached
+ *    108,832 characters of arguments) — the stream is aborted and the message discarded;
+ *  - the result tool `agent_report` failing repeatedly. N consecutive error results (schema
+ *    validation, provider truncation refusals, blocked oversized calls, tool errors) mean the run
+ *    cannot deliver what its input exists to produce. The streak resets only when `agent_report`
+ *    itself succeeds — successes of other tools interleaved between failures do not (the 11-13
+ *    incident interleaved successful read/bash calls). At N the runner performs its one corrective
+ *    turn and the streak restarts; N further failures terminate the run as REPORT_RETRY_EXHAUSTED.
  *
- * Unsupported provider formats are errors, never guesses: this guard does not parse XML/DSML into
- * JSON and does not repair side-effect tool arguments.
+ * Content-signature detection (repeated closing tags, repeated suffixes) was removed on
+ * 2026-11-14: degenerate shapes are unbounded (the 11-13 variant used other tag names and an
+ * 18–19 char repeat unit the 11-12 signatures could not see), and the per-delta regex analysis
+ * was itself a CPU hazard. Only O(1) counters remain on the streaming path.
+ *
+ * Instance model: the registry reuses one Pi instance across inputs and does not reinstall
+ * extensions, so the extension here is a stateless bridge to the *active input's* guard (the
+ * runner swaps it per input); all state lives on the guard the runner owns and feeds through its
+ * own per-input event subscription.
  */
 import type { ExtensionAPI, ExtensionFactory, MessageEndEvent, ToolCallEvent } from '@earendil-works/pi-coding-agent';
 
@@ -18,9 +29,13 @@ export const MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE = 'kaiming.model-output-correct
 
 /** The store's typed terminal code for a discarded model response. */
 export const MODEL_OUTPUT_CORRUPTED = 'MODEL_OUTPUT_CORRUPTED';
+/** The store's typed terminal code for a report the member could not deliver within the budget. */
+export const REPORT_RETRY_EXHAUSTED = 'REPORT_RETRY_EXHAUSTED';
+
+export type ModelOutputFaultCode = typeof MODEL_OUTPUT_CORRUPTED | typeof REPORT_RETRY_EXHAUSTED;
 
 export interface ModelOutputFault {
-  readonly code: typeof MODEL_OUTPUT_CORRUPTED;
+  readonly code: ModelOutputFaultCode;
   readonly detail: string;
 }
 
@@ -28,161 +43,194 @@ export interface ModelOutputFault {
 const MAX_TOOL_ARGUMENT_CHARS = 1_048_576;
 /** A report body is user-visible prose, not a log container; this is the report tool's policy. */
 const REPORT_ARGUMENT_CHARS = 16_384;
-/** Total closing tags in one stream buffer above this is a degeneration signature. */
-const TEXT_CLOSE_TAG_LIMIT = 24;
-const TOOL_CLOSE_TAG_LIMIT = 8;
-/** Keep the rolling analysis local; a degeneration signature lives near the end of the stream. */
-const MAX_ANALYSIS_CHARS = 16_384;
+/** Total streamed tool-argument characters above this is not a normal call; abort mid-stream. */
 const MAX_STREAM_ARGUMENT_CHARS = 1_048_576;
-
-const CLOSING_TAG_RUN = /(?:\s*<\/(?:invoke|function|parameter|v8)>){8,}/;
-const CLOSING_TAG = /<\/(?:invoke|function|parameter|v8)>/gi;
-
-function repeatedSuffix(text: string, minimumRepeats: number): string | undefined {
-  for (let unitLength = 4; unitLength <= 16; unitLength += 1) {
-    const unit = text.slice(-unitLength);
-    if (unit.trim() === '') continue;
-    let repeats = 0;
-    for (let end = text.length; end >= unitLength; end -= unitLength) {
-      if (text.slice(end - unitLength, end) !== unit) break;
-      repeats += 1;
-    }
-    if (repeats >= minimumRepeats) {
-      return `${JSON.stringify(unit.slice(0, 24))} repeated ${String(repeats)} times`;
-    }
-  }
-  return undefined;
-}
+/** Consecutive failed report attempts after which the runner performs its one corrective turn. */
+export const REPORT_FAILURE_LIMIT = 5;
+/** The result tool whose repeated failures the ledger counts. */
+const REPORT_TOOL = 'agent_report';
 
 /**
- * Detect a stream that has started to repeat itself. `kind` selects the threshold: a tool argument
- * is much less likely to legitimately contain many closing tags than prose/code text.
+ * Which success resets the failure streak. `same-tool` is the shipped rule; `any-success` exists
+ * only for the checker self-test: fed the 11-13 incident sequence (successful read/bash calls
+ * interleaved between report failures), it never trips, which proves the rule matters.
  */
-export function degenerationReason(text: string, kind: 'text' | 'tool'): string | undefined {
-  if (text === '') return undefined;
-  const run = CLOSING_TAG_RUN.exec(text);
-  if (run !== null) {
-    return `repeated closing tags (${String(run[0].length)} characters in one run)`;
-  }
-  const closeCount = (text.match(CLOSING_TAG) ?? []).length;
-  if (closeCount >= (kind === 'tool' ? TOOL_CLOSE_TAG_LIMIT : TEXT_CLOSE_TAG_LIMIT)) {
-    return `repeated closing tags (${String(closeCount)} occurrences)`;
-  }
-  const suffix = repeatedSuffix(text, kind === 'tool' ? 8 : 16);
-  if (suffix !== undefined) {
-    return `repeated suffix ${suffix}`;
-  }
-  return undefined;
-}
+export type ReportStreakReset = 'same-tool' | 'any-success';
 
-/** The per-tool argument policy. Unknown tools get the general backstop. */
 export function toolArgumentLimit(toolName: string): number {
-  return toolName === 'agent_report' ? REPORT_ARGUMENT_CHARS : MAX_TOOL_ARGUMENT_CHARS;
+  return toolName === REPORT_TOOL ? REPORT_ARGUMENT_CHARS : MAX_TOOL_ARGUMENT_CHARS;
 }
 
-/**
- * One guard per run. The runner reads `fault` after each prompt and performs at most one corrective
- * turn; the extension never retries by itself.
- */
+/** First text snippet of a toolResult's content, flattened and bounded, as fault evidence. */
+function firstErrorSnippet(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null || !('text' in block)) continue;
+    const text = block.text;
+    if (typeof text !== 'string' || text.trim() === '') continue;
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat;
+  }
+  return '';
+}
+
 export class ModelOutputGuard {
   fault: ModelOutputFault | undefined;
   retryUsed = false;
-  private readonly buffers = new Map<string, string>();
-  private readonly lengths = new Map<string, number>();
-  readonly extension: ExtensionFactory;
+  private readonly resetOn: ReportStreakReset;
+  private readonly streamLengths = new Map<string, number>();
+  private reportFailures = 0;
 
-  constructor() {
-    const extension = (pi: ExtensionAPI): void => {
-      pi.on('message_start', (event) => {
-        if (event.message.role === 'assistant') {
-          this.buffers.clear();
-          this.lengths.clear();
-        }
-      });
-
-      pi.on('message_update', (event, ctx) => {
-        if (this.fault !== undefined) return;
-        const delta = (event as { assistantMessageEvent?: { type?: unknown; delta?: unknown; contentIndex?: unknown } })
-          .assistantMessageEvent;
-        if (delta === undefined || typeof delta.delta !== 'string') return;
-        const type = delta.type;
-        if (type !== 'text_delta' && type !== 'toolcall_delta' && type !== 'tool_call_delta') return;
-        const index = typeof delta.contentIndex === 'number' ? delta.contentIndex : 0;
-        const key = `${type}:${String(index)}`;
-        const seen = (this.lengths.get(key) ?? 0) + delta.delta.length;
-        this.lengths.set(key, seen);
-        const next = `${this.buffers.get(key) ?? ''}${delta.delta}`;
-        if (type !== 'text_delta' && seen > MAX_STREAM_ARGUMENT_CHARS) {
-          this.fault = { code: MODEL_OUTPUT_CORRUPTED, detail: 'tool arguments exceeded the streaming size limit' };
-          try {
-            ctx.abort();
-          } catch {
-            // The stream may already be aborting; the fault is still recorded for the runner.
-          }
-          return;
-        }
-        const bounded = next.length > MAX_ANALYSIS_CHARS ? next.slice(-MAX_ANALYSIS_CHARS) : next;
-        this.buffers.set(key, bounded);
-        const reason = degenerationReason(bounded, type === 'text_delta' ? 'text' : 'tool');
-        if (reason !== undefined) {
-          this.fault = { code: MODEL_OUTPUT_CORRUPTED, detail: reason };
-          // Stop the provider stream now, rather than waiting for the output-token ceiling.
-          try {
-            ctx.abort();
-          } catch {
-            // The stream may already be aborting; the fault is still recorded for the runner.
-          }
-        }
-      });
-
-      pi.on('tool_call', (event: ToolCallEvent) => {
-        if (this.fault !== undefined) {
-          return { block: true, reason: 'the model output was already discarded as degenerate' };
-        }
-        const input = event.input as unknown;
-        if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-          this.fault = { code: MODEL_OUTPUT_CORRUPTED, detail: 'tool arguments are not a JSON object' };
-          return { block: true, reason: 'tool arguments must be a JSON object; use valid JSON' };
-        }
-        const text = JSON.stringify(input);
-        const limit = toolArgumentLimit(event.toolName);
-        if (text.length > limit) {
-          return {
-            block: true,
-            reason: `tool arguments are ${String(text.length)} characters; the ${event.toolName} limit is ${String(limit)}. Keep the result concise and put logs in paths, not the body.`,
-          };
-        }
-        return undefined;
-      });
-
-      pi.on('message_end', (event) => {
-        const message = event.message;
-        if (message.role !== 'assistant' || this.fault === undefined) return undefined;
-        // A stream abort means no tool call in this message was allowed to execute (they come after
-        // message_end). Replace the whole malformed message so it cannot poison the corrective turn.
-        return {
-          message: {
-            ...message,
-            content: [
-              {
-                type: 'text',
-                text: `[host] The previous model output was discarded as degenerate or malformed: ${this.fault.detail}. Do not repeat it. Use the tool's required JSON arguments and keep the result concise.`,
-              },
-            ],
-          } as MessageEndEvent['message'],
-        };
-      });
-    };
-    this.extension = extension;
+  constructor(options?: { readonly resetOn?: ReportStreakReset }) {
+    this.resetOn = options?.resetOn ?? 'same-tool';
   }
+
+  /**
+   * Feed one session event. Returns true when the run must be aborted now: either a streamed
+   * tool-argument buffer crossed the hard cap, or the report failure streak reached the limit.
+   */
+  observeEvent(event: unknown): boolean {
+    if (typeof event !== 'object' || event === null || !('type' in event)) return false;
+    if (event.type === 'message_start') {
+      if (this.assistantMessageOf(event) !== undefined) this.streamLengths.clear();
+      return false;
+    }
+    if (event.type === 'message_update') {
+      if (!('assistantMessageEvent' in event)) return false;
+      const delta = event.assistantMessageEvent;
+      if (typeof delta !== 'object' || delta === null || !('delta' in delta)) return false;
+      if (delta.delta === undefined || typeof delta.delta !== 'string') return false;
+      if (!('type' in delta) || (delta.type !== 'toolcall_delta' && delta.type !== 'tool_call_delta')) return false;
+      const index = 'contentIndex' in delta && typeof delta.contentIndex === 'number' ? delta.contentIndex : 0;
+      const key = `tool:${String(index)}`;
+      const seen = (this.streamLengths.get(key) ?? 0) + delta.delta.length;
+      this.streamLengths.set(key, seen);
+      if (seen > MAX_STREAM_ARGUMENT_CHARS && this.fault === undefined) {
+        this.fault = { code: MODEL_OUTPUT_CORRUPTED, detail: 'tool arguments exceeded the streaming size limit' };
+        return true;
+      }
+      return false;
+    }
+    if (event.type === 'message_end') {
+      const message = this.toolResultOf(event);
+      if (message === undefined) return false;
+      if (message.toolName !== REPORT_TOOL) {
+        if (this.resetOn === 'any-success' && message.isError === false) this.reportFailures = 0;
+        return false;
+      }
+      if (message.isError !== true) {
+        this.reportFailures = 0;
+        return false;
+      }
+      this.reportFailures += 1;
+      if (this.reportFailures >= REPORT_FAILURE_LIMIT && this.fault === undefined) {
+        this.fault = {
+          code: REPORT_RETRY_EXHAUSTED,
+          detail: `agent_report failed ${String(this.reportFailures)} consecutive times (limit ${String(REPORT_FAILURE_LIMIT)}); last error: ${firstErrorSnippet(message.content)}`,
+        };
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Decision for the extension's tool_call handler: block non-object arguments (recording a
+   * fault) and calls over the per-tool argument policy. An oversized call is blocked WITHOUT a
+   * fault — its error result feeds the report ledger like every other failure: one mechanism.
+   */
+  checkToolCall(toolName: string, input: unknown): { readonly block: boolean; readonly reason?: string } {
+    if (this.fault !== undefined) {
+      return { block: true, reason: 'the model output was already discarded as degenerate' };
+    }
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      this.fault = { code: MODEL_OUTPUT_CORRUPTED, detail: 'tool arguments are not a JSON object' };
+      return { block: true, reason: 'tool arguments must be a JSON object; use valid JSON' };
+    }
+    const text = JSON.stringify(input);
+    const limit = toolArgumentLimit(toolName);
+    if (text.length > limit) {
+      return {
+        block: true,
+        reason: `tool arguments are ${String(text.length)} characters; the ${toolName} limit is ${String(limit)}. Keep the result concise and put logs in paths, not the body.`,
+      };
+    }
+    return { block: false };
+  }
+
+  /** The corrective turn starts a fresh report budget; the runner calls this once per input. */
+  resetReportStreak(): void {
+    this.reportFailures = 0;
+  }
+
+  /** Replacement content for an assistant message the guard discarded, so history stays clean. */
+  replacementText(): string {
+    return `[host] The previous model output was discarded: ${this.fault?.detail ?? 'malformed'}. Use the tool's required JSON arguments and keep the result concise.`;
+  }
+
+  /** The `message` of a session event, when it is an assistant message (narrowed, not cast). */
+  private assistantMessageOf(event: object): unknown {
+    if (!('message' in event) || typeof event.message !== 'object' || event.message === null) return undefined;
+    const message = event.message;
+    if (!('role' in message) || message.role !== 'assistant') return undefined;
+    return message;
+  }
+
+  /** The `message` of a session event, when it is a toolResult message (narrowed, not cast). */
+  private toolResultOf(event: object): { toolName: string; isError: boolean; content: unknown } | undefined {
+    if (!('message' in event) || typeof event.message !== 'object' || event.message === null) return undefined;
+    const message = event.message;
+    if (!('role' in message) || message.role !== 'toolResult') return undefined;
+    if (!('toolName' in message) || !('isError' in message)) return undefined;
+    return {
+      toolName: typeof message.toolName === 'string' ? message.toolName : '',
+      isError: message.isError === true,
+      content: 'content' in message ? message.content : undefined,
+    };
+  }
+}
+
+/**
+ * The per-instance extension bridge. The registry reuses a Pi instance across inputs without
+ * reinstalling extensions, so handlers resolve the *active* input's guard on every event instead
+ * of closing over one input's state.
+ */
+export function createModelOutputGuardExtension(active: () => ModelOutputGuard | undefined): ExtensionFactory {
+  return (pi: ExtensionAPI): void => {
+    pi.on('tool_call', (event: ToolCallEvent) => {
+      const guard = active();
+      if (guard === undefined) return undefined;
+      const decision = guard.checkToolCall(event.toolName, event.input);
+      return decision.block
+        ? { block: true, ...(decision.reason !== undefined ? { reason: decision.reason } : {}) }
+        : undefined;
+    });
+    pi.on('message_end', (event: MessageEndEvent) => {
+      const guard = active();
+      if (guard === undefined || guard.fault === undefined) return undefined;
+      const message = event.message;
+      if (message.role !== 'assistant') return undefined;
+      // A guard fault means the in-flight content must not enter persistent history: replace the
+      // whole malformed message so it cannot poison the corrective turn. The replacement is
+      // structurally the same assistant message with one text block; the SDK's message union
+      // cannot express that narrowing from a literal, so this is the boundary's one unchecked
+      // shape, assigned to a named constant.
+      const replaced: MessageEndEvent['message'] = {
+        ...message,
+        content: [{ type: 'text', text: guard.replacementText() }],
+      };
+      return { message: replaced };
+    });
+  };
 }
 
 /** True for the hidden corrective turn; the browser already has the terminal failure/notice. */
 export function isHiddenModelOutputCorrectionEvent(event: unknown): boolean {
-  if (typeof event !== 'object' || event === null) return false;
-  const record = event as { type?: unknown; message?: { role?: unknown; customType?: unknown } };
-  if (record.type !== 'message_start' && record.type !== 'message_end' && record.type !== 'message_update') {
-    return false;
-  }
-  return record.message?.role === 'custom' && record.message?.customType === MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE;
+  if (typeof event !== 'object' || event === null || !('type' in event)) return false;
+  if (event.type !== 'message_start' && event.type !== 'message_end' && event.type !== 'message_update') return false;
+  if (!('message' in event) || typeof event.message !== 'object' || event.message === null) return false;
+  const message = event.message;
+  if (!('role' in message) || message.role !== 'custom') return false;
+  if (!('customType' in message) || message.customType !== MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE) return false;
+  return true;
 }
