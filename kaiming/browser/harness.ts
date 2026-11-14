@@ -47,6 +47,8 @@ export interface Harness {
   readonly project: SeededProject | null;
   /** The absolute URL a spec navigates to (the port is dynamic). */
   readonly url: string;
+  /** The temp data directory: a spec can seed Task rows through a second Store connection. */
+  readonly dataDir: string;
   /**
    * Submit a message to the seeded session through the same RPC the page uses, and hand back the
    * input id. A scripted provider answers in milliseconds, so a spec that needs to observe a live
@@ -185,7 +187,7 @@ export async function startHarness(
     return accepted.inputId;
   };
   try {
-    return { baseUrl: running.origin, url: `${running.origin}/`, accessPassword, project, submitInput, close };
+    return { baseUrl: running.origin, url: `${running.origin}/`, accessPassword, project, dataDir, submitInput, close };
   } catch (error) {
     await close();
     throw error;

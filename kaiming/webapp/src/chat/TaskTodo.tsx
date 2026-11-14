@@ -1,7 +1,7 @@
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { Markdown } from './Markdown';
-import { usePhaseLabel, type TaskMemberRow } from './task-labels';
+import { reportReasonOf, usePhaseLabel, type TaskMemberRow } from './task-labels';
 import type { TaskDetail } from '../state/slot';
 import { flowOf } from './task-flow';
 import { Elapsed } from './Elapsed';
@@ -191,10 +191,19 @@ function TodoMemberRow({
   const rework = laterRound && row.activity === 'processing';
   const state = memberRowState(row);
   const kind = state.kind;
+  // A member that failed names its reason when the terminal code has a sentence — for a plain
+  // failure and for a missing report (WHY it is missing reads differently per code). Rows
+  // without a resolvable code keep the generic note; an unknown failed code stays visible.
+  const reason =
+    state.note === 'failed' || state.note === 'missingReport' ? reportReasonOf(row, t) : null;
   const label =
     state.note === 'asking'
       ? t('task.note.asking', { title: row.note === '' ? '' : row.note })
-      : t(`task.state.${state.note}` as 'task.state.missingReport');
+      : reason !== null
+        ? reason
+        : state.note === 'failed' && row.errorCode !== null && row.errorCode !== undefined && row.errorCode !== ''
+          ? row.errorCode
+          : t(`task.state.${state.note}` as 'task.state.missingReport');
   return (
     <button type="button" className="mrow" data-testid="task-member-row" onClick={() => onFollow(row.sessionId)}>
       <State kind={kind} />

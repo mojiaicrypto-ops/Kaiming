@@ -1,5 +1,6 @@
 import { useI18n } from '../i18n/I18nProvider';
 import type { SessionActivity } from '../api/stream';
+import { MESSAGE_KEYS } from '../i18n/catalog';
 
 /** The phase names a Task really has, and the label each one shows. */
 const PHASE_KEY = {
@@ -39,4 +40,29 @@ export interface TaskMemberRow {
   readonly latestVerdict?: string | null;
   readonly waitingUser?: boolean;
   readonly note: string;
+  /** The terminal errorCode of the member's latest input, when the input failed. */
+  readonly errorCode?: string | null;
+}
+
+/** The catalog key for a terminal error code, or null when no sentence exists for it. */
+export function catalogErrorKey(code: string | null | undefined): 'error.blocked_config' | null {
+  if (code === null || code === undefined || code === '') return null;
+  return MESSAGE_KEYS.includes(`error.${code}` as never) ? (`error.${code}` as 'error.blocked_config') : null;
+}
+
+/**
+ * The reason a member's input failed, when the terminal error code has a catalog sentence: shown
+ * on the roster row for a failed member (the raw code stays visible for unknown codes) and for a
+ * member whose report is missing (the sentence says WHY it is missing — the 11-14 degeneration
+ * budget vs an instruction-shaped REPORT_MISSING read differently). Null when there is no
+ * resolvable code, so the row keeps its generic note.
+ */
+export function reportReasonOf(
+  row: Pick<TaskMemberRow, 'lastInputStatus' | 'errorCode'>,
+  t: (key: 'error.blocked_config' | 'task.state.failed') => string,
+): string | null {
+  if (row.lastInputStatus !== 'failed') return null;
+  if (row.errorCode === null || row.errorCode === undefined || row.errorCode === '') return null;
+  const key = catalogErrorKey(row.errorCode);
+  return key === null ? null : t(key);
 }

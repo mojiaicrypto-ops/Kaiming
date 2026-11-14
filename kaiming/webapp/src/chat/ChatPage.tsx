@@ -304,6 +304,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
         assignment: member.label === '' || member.label === member.roleId ? '' : member.label,
         activity,
         lastInputStatus,
+        errorCode: member.errorCode ?? null,
         reportMissing: member.reportMissing === true,
         executionStartedAt: member.executionStartedAt ?? null,
         executionEndedAt: member.executionEndedAt ?? null,
