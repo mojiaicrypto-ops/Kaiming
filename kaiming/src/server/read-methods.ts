@@ -714,8 +714,10 @@ function backlogItemView(
     .filter((task) => OPEN_TASK_STATUSES.includes(task.status))
     .map(compact);
   const producerTasks = produced.map(compact);
+  // "Split into" is the source item's fact: only a design Task that claimed *this* item split it.
+  // A slice the same design produced points back through `producerTasks`, not at its siblings.
   const sliceIds = new Set<string>();
-  for (const task of related) {
+  for (const task of claimed) {
     if (task.workKind !== 'design') continue;
     for (const other of read.items) {
       if (other.id !== item.id && other.taskIds.includes(task.id)) sliceIds.add(other.id);

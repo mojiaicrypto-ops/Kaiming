@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { RpcError } from '../src/api/rpc';
 import {
-  groupsOf,
-  boardOf,
-  flowChain,
+  activeWork,
   awaitingDesign,
-  isVersionConflict,
+  boardOf,
   cellPath,
+  flowChain,
+  groupsOf,
+  isVersionConflict,
   moduleTable,
-  projectNameFrom,
   parseSpecRefs,
+  projectNameFrom,
   type BacklogItemView,
 } from '../src/project/project-model';
 
@@ -162,5 +163,53 @@ describe('design board', () => {
     });
     expect(flowChain(design, true).map((step) => step.key)).toEqual(['design', 'review', 'gate', 'settle']);
     expect(flowChain(design, true).find((step) => step.gate)?.state).toBe('current');
+  });
+
+  it('shows the producing design chain, not a not-yet-started implement chain, on a pending slice', () => {
+    const slice = item({
+      id: 'B-7',
+      ready: true,
+      specRefs: ['spec.md#x'],
+      producerTasks: [{ taskId: 't-d', status: 'active', workKind: 'design', phase: 'settle' }],
+    });
+    const chain = flowChain(slice, false);
+    expect(chain.map((step) => step.key)).toEqual(['design', 'review', 'gate', 'settle']);
+    expect(chain.find((step) => step.key === 'settle')?.state).toBe('current');
+    expect(chain.find((step) => step.gate)?.state).toBe('done');
+    // The producer is the work in progress; a claim still wins once implementation starts.
+    expect(activeWork(slice)?.taskId).toBe('t-d');
+    expect(
+      activeWork({
+        ...slice,
+        openTasks: [{ taskId: 't-i', status: 'active', workKind: 'implement', phase: 'develop' }],
+      })?.taskId,
+    ).toBe('t-i');
+  });
+
+  it('keeps a spec-ref-less slice in Ideas while its design is open, but flags and chains it as design', () => {
+    const pending = item({
+      id: 'B-9',
+      ready: false,
+      producerTasks: [{ taskId: 't-d', status: 'active', workKind: 'design', phase: 'settle' }],
+    });
+    const board = boardOf([pending]);
+    // BL-04: Ready needs a spec reference; the badge and the design chain keep the card honest.
+    expect(board.ideas.map((card) => card.item.id)).toEqual(['B-9']);
+    expect(board.ready).toEqual([]);
+    expect(board.ideas[0]?.awaitingDesign).toBe(true);
+    expect(flowChain(pending, false).map((step) => step.key)).toEqual(['design', 'review', 'gate', 'settle']);
+  });
+
+  it('ignores a settled design producer when choosing the work the card shows', () => {
+    const settled = item({
+      id: 'B-4',
+      ready: true,
+      specRefs: ['spec.md#x'],
+      producerTasks: [{ taskId: 't-d', status: 'completed', workKind: 'design', phase: 'settle' }],
+    });
+    expect(activeWork(settled)).toBeUndefined();
+    const chain = flowChain(settled, false);
+    expect(chain.map((step) => step.key)).toEqual(['plan', 'develop', 'review', 'test', 'settle']);
+    expect(chain.find((step) => step.key === 'design')).toBeUndefined();
   });
 });

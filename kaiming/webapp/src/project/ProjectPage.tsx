@@ -6,6 +6,7 @@ import type { RpcClient } from '../api/rpc';
 import { usePhaseLabel } from '../chat/task-labels';
 import { BacklogDrawer } from './BacklogDrawer';
 import {
+  activeWork,
   boardOf,
   cellPath,
   directTasks,
@@ -111,6 +112,8 @@ function BoardCard({
 }) {
   const { t } = useI18n();
   const row: BacklogItemView = item.item;
+  const work = activeWork(row);
+  const slices = (row.splitInto ?? []).length;
   return (
     <button
       type="button"
@@ -121,19 +124,18 @@ function BoardCard({
     >
       <span className="pp-card-h">
         <span className="pp-id">{row.id}</span>
-        <span className="pp-card-title">{row.title}</span>
+        <span className="pp-card-title" title={row.title}>{row.title}</span>
       </span>
       <Chain steps={flowChain(row, pending)} />
-      <span className="pp-meta">
-        {row.openTasks[0] !== undefined && <span className="pp-tag">{t(kindKey(row.openTasks[0]?.workKind))}</span>}
-        {(row.splitInto ?? []).length > 0 && <span className="pp-tag">{t('project.sliceCount', { count: (row.splitInto ?? []).length })}</span>}
-        {item.awaitingDesign && <span className="pp-tag wait" data-testid="backlog-awaiting-design">{t('project.awaitingDesign')}</span>}
-        {pending && <span className="pp-tag decide" data-testid="project-deciding">{t('project.deciding')}</span>}
-        {item.reworkCount > 0 && <span className="pp-tag">{t('project.rework', { count: item.reworkCount })}</span>}
-        {(row.splitInto ?? []).length > 0 && (
-          <span className="pp-tag">{t('project.splitInto', { ids: (row.splitInto ?? []).join(', ') })}</span>
+      <span className="pp-card-meta">
+        {work !== undefined && <span>{t(kindKey(work.workKind))}</span>}
+        {slices > 0 && <span>{t('project.sliceCount', { count: slices })}</span>}
+        {item.awaitingDesign && (
+          <span className="pp-flag wait" data-testid="backlog-awaiting-design">{t('project.awaitingDesign')}</span>
         )}
-        {row.problems.length > 0 && <span className="pp-tag">{t('backlog.problems', { count: row.problems.length })}</span>}
+        {pending && <span className="pp-flag decide" data-testid="project-deciding">{t('project.deciding')}</span>}
+        {item.reworkCount > 0 && <span>{t('project.rework', { count: item.reworkCount })}</span>}
+        {row.problems.length > 0 && <span>{t('backlog.problems', { count: row.problems.length })}</span>}
         <span className="pp-go" aria-hidden="true">›</span>
       </span>
     </button>
@@ -319,34 +321,6 @@ export function ProjectPage({
         />
         <button type="button" className="btn" onClick={() => void add()}>{t('common.add')}</button>
       </div>
-
-      <div className="pp-board" data-testid="project-board">
-        {([
-          ['idea', 'project.idea', board.ideas],
-          ['designing', 'project.designing', board.designing],
-          ['ready', 'backlog.ready', board.ready],
-          ['implementing', 'project.implementing', board.implementing],
-        ] as const).map(([key, labelKey, cards]) => (
-          <div key={key} className="pp-lane" data-testid={`board-${key}`}>
-            <div className="pp-lane-head">
-              <span>{t(labelKey)}</span>
-              <span className="pp-count">{cards.length}</span>
-            </div>
-            <div className="pp-lane-body">
-              {cards.length === 0 && <div className="pp-empty">{t('project.laneEmpty')}</div>}
-              {cards.map((card) => (
-                <BoardCard
-                  key={card.item.id}
-                  item={card}
-                  pending={pendingFor(card.item.openTasks[0]?.taskId)}
-                  onSelect={() => onSelect(card.item.id)}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
       {direct.length > 0 && (
         <div className="pp-section" data-testid="project-direct">
           <div className="pp-sec-head">
@@ -367,6 +341,34 @@ export function ProjectPage({
           </div>
         </div>
       )}
+
+      <div className="pp-board" data-testid="project-board">
+        {([
+          ['idea', 'project.idea', board.ideas],
+          ['designing', 'project.designing', board.designing],
+          ['ready', 'backlog.ready', board.ready],
+          ['implementing', 'project.implementing', board.implementing],
+        ] as const).map(([key, labelKey, cards]) => (
+          <div key={key} className="pp-lane" data-testid={`board-${key}`}>
+            <div className="pp-lane-head">
+              <span>{t(labelKey)}</span>
+              <span className="pp-count">{cards.length}</span>
+            </div>
+            <div className="pp-lane-body">
+              {cards.length === 0 && <div className="pp-empty">{t('project.laneEmpty')}</div>}
+              {cards.map((card) => (
+                <BoardCard
+                  key={card.item.id}
+                  item={card}
+                  pending={pendingFor(activeWork(card.item)?.taskId)}
+                  onSelect={() => onSelect(card.item.id)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
 
       {board.completed.length > 0 && (
         <details className="pp-closed" data-testid="project-completed">

@@ -244,14 +244,29 @@ export interface BoardView {
   readonly completed: readonly BacklogItemView[];
 }
 
+/** A slice whose design (claimed or producing) is still open: it cannot be implemented yet. */
 export function awaitingDesign(item: BacklogItemView): boolean {
   return [...item.openTasks, ...(item.producerTasks ?? [])].some(
     (task) => task.workKind === 'design' && OPEN_TASK.has(task.status),
   );
 }
 
+/**
+ * The Task actually working on this item now: a claim, else the design Task that produced it while
+ * that design is still open. A slice waiting for design settlement has no claim, so without the
+ * second arm the chain would fall back to an implement chain that has not started.
+ */
+export function activeWork(item: BacklogItemView): BacklogTaskRef | undefined {
+  return (
+    item.openTasks[0] ??
+    (item.producerTasks ?? []).find(
+      (task) => task.workKind === 'design' && OPEN_TASK.has(task.status),
+    )
+  );
+}
+
 export function flowChain(item: BacklogItemView, pending: boolean): readonly ChainStep[] {
-  const active = item.openTasks[0];
+  const active = activeWork(item);
   const kind = active?.workKind ?? (item.ready ? 'implement' : 'design');
   const requiresTest = active?.requiresTest ?? true;
   const phase = active?.phase ?? (kind === 'design' ? 'design' : 'plan');

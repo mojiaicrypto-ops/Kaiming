@@ -126,3 +126,13 @@
 - **实现**：`session.fork(projectId, sessionId, title?)`（写方法）：源须为本项目 chief、无 queued/processing/interrupted 输入、已有持久化历史且文件存在（分别 `INVALID_ARGUMENT` / `WORKSPACE_BUSY` / `HISTORY_UNAVAILABLE`）；允许源仍有未结束 Task，新会话 `currentTaskId`/`channel` 为 null、无输入/交互/授权。标题缺省为「源标题 + `(fork)`」（源自定义名或首条用户输入首个非空行，为后缀留位）；显式 `title` 归一化空白后使用、不加后缀；上限 60 个 UTF-16 单元（与 `session.rename` 及 rail 同一口径，不劈代理对），`titleOf` 同步改为同一单位。分叉点取文件当前 leaf（记录中的 branchEntryId 可能落后于压缩）。先复制文件、再在同一事务写 session + binding，行失败删除文件不留孤儿。`s-<12 hex>` 对齐既有会话 ID。前端会话列每行加「⎇」，成功后刷新并选中副本、toast 确认，拒绝时显示服务端原因。
 - **证据**：`test/server-write.test.ts` 新增 7 例——真实历史 fork（源文件字节不变、binding 不同、副本经 `session.messages.list` 可读、两侧各发一条互不串扰）、源带未结束 Task 仍可 fork 且副本不继承、空/无历史/忙(processing 与 interrupted)/非 chief/跨项目拒绝且零新行、缺历史文件 `HISTORY_UNAVAILABLE`、标题后缀保留与显式标题（含 astral 不劈开）、行写入失败不留 JSONL。`browser/session-fork.spec.ts` 真实浏览器：一轮对话后点「⎇」→ 出现 `… (fork)` 并选中、副本可读回复；新空会话 fork 显示 `Not forked` toast；`browser/smoke.spec.ts` 10/10 不回归。独立 Test 变异（busy、hasHistory、复用源文件、去掉 unlink、截断副本）全部由 shipped 用例按预期变红；webapp 137 用例、build、服务端 `tsc --noEmit` 通过。独立 Review 两轮（needs_fix → 修复 → pass）。
 - **边界**：快速双击「⎇」可产生两个 fork（每次新 requestId，无 in-flight 守卫）；浏览器拒绝 toast 只覆盖空会话原因；头部血缘不在会话列展示（仅 JSONL header）；无分支树 UI；不做历史回填。
+
+### 2026-11-18 · P2-4 项目页密度与阶段显示
+
+- **问题**：项目页卡片把完成链画成四个胶囊并重复展开切片编号，四列在 1080 宽度下每列约 250px；待设计确认的切片没有领取 Task，`flowChain` 只看 `openTasks`，于是显示尚未开始的实施链（Plan 高亮），与“待设计确认”矛盾。流程带用六个描边块，与列头重复计数。
+- **实现**：`activeWork` 先取未结束领取 Task，否则取仍在进行、产出该切片的 design Task；阶段链与工作类型都由它推导（待确认切片显示设计链并按真实 phase 高亮）。卡片保留编号、两行标题、阶段链与一行元信息；切片编号只在详情抽屉。直接工作移到流程带之后；内容区加宽到 1320，流程带改为带分隔线的摘要行，阶段链改为三态文本，卡片/列间距放宽（U6 同步）。
+- **证据**：`webapp/test/project-model.test.ts` 15/15（待确认设计链、领取优先、结算后忽略产出 Task、待确认切片进就绪）；webapp 140/140；`browser/project.spec.ts` 等 project 相关 16/16；`test/backlog-rpc.test.ts` 8/8。真实 CharKeep 数据下设计完成前后两种状态都观察到：设计进行中 11 条切片在“就绪”并标“待设计确认”、直接工作显示 `t-2dbe518eeb45 · Design · Review · Running`；设计结算后卡片回到实施链 `Plan→…→Settle`，11 条仍在“就绪”，直接工作区随 Task 完成消失。抽屉保留来源与产生它的 Task；被拆分原条目才显示 `split into …`。
+- **边界**：分列语义未改（“设计中”仍只统计被领取的条目；从对话发起的整项目设计属于直接工作）；不新增请求、状态或存储。设计 Task 未领取任何条目时（本次 CharKeep），11 条切片不再各自显示“10 slice(s)”——它们不是拆分来源；卡片“切片数”只属于被领取并拆分的原条目。
+- **补充（拆分去向）**：`backlog.list/get` 的 `splitInto` 只对“被该设计 Task 领取的原条目”计算；设计产出的切片不再把兄弟切片列为自己的拆分去向，仍通过 `producerTasks` 指回设计 Task。`test/backlog-rpc.test.ts` 覆盖原条目列出 B-7/B-8、切片自身为空；改回按全部关联 Task 计算时该用例变红。
+- **补充（待确认切片分列）**：分列仍按 BL-04：“就绪”要求规格引用。由未结束设计 Task 产出、尚无引用的切片留在“想法”，但卡片标“待设计确认”并按产出设计 Task 的真实阶段显示设计链（不再显示未开始的实施链）；单元用例锁定“想法 + awaitingDesign + 设计链”，去掉该判定时用例变红。
+- **复核收口**：计划中的阶段链改为纯文字三态并去掉 `opacity`（实测深/浅色 5.22:1 / 4.62:1，满足 U7）；撤销“无规格引用也进就绪”，这类切片留在想法但保留“待设计确认”与设计链（用例锁定）；卡片“等你决定”改看 `activeWork`（含未领取的产出设计 Task）。

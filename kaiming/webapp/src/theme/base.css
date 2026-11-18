@@ -3848,7 +3848,7 @@ details > summary {
 .pp {
   min-height: 0;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: var(--s6) var(--s8) var(--s12);
   display: flex;
@@ -3866,7 +3866,7 @@ details > summary {
   margin: 0;
   font-size: var(--fs-20);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 .pp-ident {
   display: flex;
@@ -3874,32 +3874,37 @@ details > summary {
   gap: 2px;
   min-width: 0;
 }
+/* The flow strip is a summary, not six controls: one line, numbers first, thin dividers. */
 .pp-stats {
   display: flex;
-  align-items: center;
-  gap: var(--s3);
+  align-items: baseline;
+  gap: 0;
   flex-wrap: wrap;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
 }
 .pp-stat {
   display: inline-flex;
   align-items: baseline;
-  gap: var(--s2);
-  padding: var(--s1) var(--s3);
-  border: 1px solid var(--line);
+  gap: 6px;
+  padding: 0 var(--s4);
   color: var(--fg-3);
   font-size: var(--fs-12);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+}
+.pp-stat:first-child {
+  padding-left: 0;
+}
+.pp-stat + .pp-stat {
+  border-left: 1px solid var(--line);
 }
 .pp-stat b {
   color: var(--fg);
   font-family: var(--mono);
   font-size: var(--fs-14);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
-.pp-stat.decide {
-  border-color: var(--decide);
-  color: var(--decide);
-}
+.pp-stat.decide,
 .pp-stat.decide b {
   color: var(--decide);
 }
@@ -4197,13 +4202,13 @@ details > summary {
 .pp-board {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s3);
+  gap: var(--s4);
   align-items: start;
 }
 .pp-lane {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
   background: var(--surface);
   overflow: hidden;
 }
@@ -4212,34 +4217,45 @@ details > summary {
   align-items: center;
   justify-content: space-between;
   gap: var(--s2);
-  padding: var(--s3);
-  border-bottom: 1px solid var(--border);
+  padding: var(--s3) var(--s4);
+  color: var(--fg-2);
   font-size: var(--fs-12);
   font-weight: 600;
-  color: var(--muted);
+}
+.pp-lane-head .pp-count {
+  border: 0;
+  padding: 0;
+  color: var(--fg-3);
+  font-weight: 400;
 }
 .pp-lane-body {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
-  padding: var(--s2);
-  min-height: 64px;
+  padding: 0 var(--s2) var(--s2);
+  min-height: 56px;
+}
+.pp-lane-body > .pp-empty {
+  padding: var(--s4) 0;
+  text-align: center;
 }
 .pp-card {
   display: flex;
   flex-direction: column;
-  gap: var(--s2);
+  gap: 6px;
   width: 100%;
   padding: var(--s3);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .pp-card:hover {
   background: var(--sel);
+  border-color: var(--line-strong);
 }
 .pp-card-h {
   display: flex;
@@ -4248,39 +4264,66 @@ details > summary {
   min-width: 0;
 }
 .pp-card-title {
-  font-weight: 600;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
+/* The chain is a sentence, not five buttons: completed muted, current accented, rest faint. */
 .pp-chain {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-items: baseline;
+  gap: 0;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
 }
 .pp-chip {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: var(--fs-11);
-  color: var(--muted);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
   white-space: nowrap;
 }
+.pp-chip + .pp-chip::before {
+  content: '→';
+  margin: 0 4px 0 2px;
+  color: var(--line);
+}
 .pp-chip.done {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--fg-2);
 }
 .pp-chip.current {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
 }
 .pp-chip.planned {
-  border-style: dashed;
-  opacity: 0.72;
+  color: var(--fg-3);
 }
-.pp-tag.wait {
-  color: var(--warning);
+.pp-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+.pp-card-meta > span {
+  white-space: nowrap;
+}
+.pp-card-meta > span.pp-go {
+  margin-left: auto;
+}
+.pp-flag.wait {
+  color: var(--run);
+}
+.pp-flag.decide {
+  color: var(--decide);
 }
 @media (max-width: 1100px) {
   .pp-board {

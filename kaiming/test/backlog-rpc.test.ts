@@ -131,6 +131,67 @@ describe('backlog RPC', () => {
     expect((list.result as { items: Array<{ openTasks: unknown[] }> }).items.every((entry) => Array.isArray(entry.openTasks))).toBe(true);
   });
 
+  it('puts split destinations on the claimed source, not on every slice the design produced', async () => {
+    const w = world();
+    writeFileSync(
+      w.pathA,
+      [
+        '# 待办',
+        '',
+        '## 未完成',
+        '',
+        '### B-1 大想法',
+        '- 状态: open',
+        '',
+        '### B-7 切片一',
+        '- 状态: open',
+        '- 规格: .dev/product/a.md',
+        '- Task: t-d',
+        '',
+        '### B-8 切片二',
+        '- 状态: open',
+        '- 规格: .dev/product/a.md',
+        '- Task: t-d',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    // The design claimed B-1 and produced B-7/B-8; the file records the producer on each slice.
+    writeFileSync(
+      w.pathA,
+      readFileSync(w.pathA, 'utf8').replace('### B-1 大想法\n- 状态: open\n', '### B-1 大想法\n- 状态: open\n- Task: t-d\n'),
+      'utf8',
+    );
+    w.store.createTask({
+      id: 't-d',
+      projectId: w.projectA,
+      chiefSessionId: 'c-a',
+      ownerEpoch: 1,
+      backlogIds: ['B-1'],
+      type: 'write',
+      workKind: 'design',
+      flowVersion: 1,
+      initialPhase: 'design',
+      requiresTest: false,
+      goal: 'design B-1',
+      scope: 'spec and slices',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    const listed = await w.call('backlog.list', { projectId: w.projectA, state: 'all' });
+    const items = (listed.result as {
+      items: Array<{ id: string; splitInto: string[]; producerTasks: Array<{ taskId: string }> }>;
+    }).items;
+    const byId = new Map(items.map((entry) => [entry.id, entry]));
+    expect(byId.get('B-1')?.splitInto).toEqual(['B-7', 'B-8']);
+    // A produced slice points back at its design Task; it did not split itself into its siblings.
+    expect(byId.get('B-7')?.splitInto).toEqual([]);
+    expect(byId.get('B-7')?.producerTasks.map((task) => task.taskId)).toEqual(['t-d']);
+  });
+
   it('refuses a cross-project id instead of reading another project', async () => {
     const w = world();
     const result = await w.call('backlog.get', { projectId: w.projectB, id: 'B-1' });
