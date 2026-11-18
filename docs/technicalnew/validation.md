@@ -91,3 +91,10 @@
 - **根因与决策**：11-12 的流式正则签名防线在 11-13 事故（settler `agent_report` 48 连败、developer 68 分钟退化）中拦截 0 次且消耗 CPU。删除全部内容签名正则，改为**纯结构记账（`src/runtime/model-output-guard.ts`）**：流式参数超 1MB 硬上限立即中止；单次输入内 `agent_report` 连续 5 次错误结果（schema/截断/16KB 超限/工具报错）触发 1 次隐藏纠正 turn 并清零连击，再 5 败以 `failed/REPORT_RETRY_EXHAUSTED` 终止（仅 `agent_report` 自身成功可清零连击）。`guidance.ts` 对该终态指引派发新会话，避免复发历史投毒。
 - **证据**：单元 18 例（含变异自检与 200 种子对抗发生器）+ 集成 2 例 + 历史转录回放 **1003 个真实 input**（精准命中事故会话、健康流量零误杀）。
 - **codemode 批量工具接入（2026-11-14）**：`PiRuntimeFactory.create` 预装 `createCodemodeExtension({ models: false })` 并仅对 `developer`/`tester` 开放 allowlist，嵌套调用共享同一权限、删除门禁与文件边界（`test/codemode-runtime.test.ts` 正负向控制通过）。
+
+### 2026-11-18 · P0-1 派发信封与同回合补交（升级 R6）
+
+- **根因**：派发只把主管自由文本 `instructions` 交给成员，成员要先花 2～3 个回合 `task(op=get)`/读 Plan 才开工；成员以纯文本结束（漏调 `agent_report`）即被判 `failed/REPORT_MISSING`，逼主管跨会话再派一轮（suangua 现场占 Reviewer 的 16.5%）。
+- **实现**：`delegation-tools.ts` 新增纯函数 `buildDispatchEnvelope`，宿主把 Task 身份/目标、新建成员的计划路径与验收摘要（≤1500 字符）、范围核对、writeScope/引用、Review/Test/Settle 的最新上游报告与 `agent_report` 硬性收尾（review/test 需 verdict）写进 **Pi payload**；`task_sessions.instructions` 保持主管原话。`store.continueTaskSession` 接受可选 `inputPayload`，续办同样携带信封。`runner.ts` 新增 `recoverMissingReport`：成员正常停稳但无结果时先发一次隐藏补交提醒（`display=false`），补交成功即 `completed`，仍无报告才 `REPORT_MISSING`；隐藏 turn 类型统一收敛到 `model-output-guard.ts` 的 `isHiddenInternalTurnEvent`，浏览器流与历史重载都看不到。
+- **证据**：`test/delegation.test.ts` 断言 instructions 列为原文而 payload 含信封、Review 阶段带上游 implementation 路径；`test/runtime.test.ts` 正向自愈（prose → 提醒 → `agent_report` → `completed`，1 条结果、提醒 `display:false`）与负向控制（两次纯文本 → `failed/REPORT_MISSING`、历史中提醒恰好 1 次、含 verdict 指引）；独立 Test 以删掉唯一调用点的变异验证正向用例真的变红并逐字节还原。定向 3 文件 99 用例、关联 5 文件 133 用例、`tsc --noEmit` 通过。独立 Review 结论 pass，唯一 minor（纯等待路径也计算信封）已修复。
+- **边界**：补交每输入最多一次，不重放工作；服务端丢弃隐藏 turn 只有谓词单测 + 一行接线，没有端到端断言（登记为覆盖缺口）；`recoverMissingReport` 的六个短路条件各自没有独立用例（改动它们只会多/少一次无害提醒）。

@@ -8,25 +8,103 @@
  * the work, not the routing.
  */
 import { randomUUID } from 'node:crypto';
-import { RESULT_KINDS, StoreError, type ResultKind, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
+import { RESULT_KINDS, StoreError, type ResultKind, type ResultRow, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { ROLE_PHASE, dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
 import { readPlan } from '../runtime/plan-store.ts';
-import { scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
+import { acceptanceText, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
 
-/** Host-supplied facts a member must not have to guess: the declared scope and files outside it. */
-function scopeNoteFor(context: DispatchContext, task: TaskRow): string | undefined {
-  if (!['review', 'test', 'settle'].includes(task.phase) || task.planRef === null) {
-    return undefined;
-  }
-  const plan = readPlan(task.planRef);
-  const check = scopeCheckFor(context.cwd, plan.text);
-  return `Host facts (not the dispatcher's words) — ${scopeCheckText(check)}`;
+const ACCEPTANCE_LIMIT = 1_500;
+
+/** Facts a dispatched member must not have to rediscover; the caller reads them once per dispatch. */
+export interface DispatchEnvelopeFacts {
+  readonly planPath?: string;
+  readonly acceptance?: string;
+  readonly scopeLine?: string;
+  /** Latest implementation/review/test reports of this Task, newest last. */
+  readonly upstream: readonly ResultRow[];
 }
 
-function withScopeNote(instructions: string, note: string | undefined): string {
-  return note === undefined ? instructions : `${instructions}\n\n${note}`;
+/**
+ * The host half of a dispatch: what the Task is, what the Plan requires, what changed, and the
+ * hard report contract. It travels in the input payload, never in the member's `instructions`
+ * column, so the UI keeps showing the chief's own words.
+ */
+export function buildDispatchEnvelope(
+  task: TaskRow,
+  member: {
+    readonly roleId: string;
+    readonly expectedKind: string;
+    readonly writeScope: readonly string[];
+    readonly refs: readonly string[];
+    readonly isContinuation: boolean;
+  },
+  facts: DispatchEnvelopeFacts,
+): string {
+  const lines = [
+    "Host-supplied facts (not the dispatcher's words)",
+    `Task ${task.id} (${task.type}, workKind=${task.workKind}, phase=${task.phase}, role=${member.roleId}, expectedKind=${member.expectedKind})`,
+    `Goal: ${task.goal}`,
+  ];
+  if (!member.isContinuation && facts.planPath !== undefined) {
+    lines.push(`Plan path: ${facts.planPath}`);
+  }
+  if (!member.isContinuation && facts.acceptance !== undefined && facts.acceptance !== '') {
+    lines.push(
+      `Acceptance (from the Plan): ${
+        facts.acceptance.length > ACCEPTANCE_LIMIT ? `${facts.acceptance.slice(0, ACCEPTANCE_LIMIT)}…` : facts.acceptance
+      }`,
+    );
+  }
+  if (facts.scopeLine !== undefined) lines.push(facts.scopeLine);
+  if (member.writeScope.length > 0) lines.push(`Assigned writeScope: ${member.writeScope.join(', ')}`);
+  if (member.refs.length > 0) lines.push(`Cited refs: ${member.refs.join(', ')}`);
+  if (facts.upstream.length > 0) {
+    lines.push('Upstream results:');
+    for (const result of facts.upstream) {
+      lines.push(`- ${result.kind} ${result.resultId} verdict=${result.verdict ?? 'none'} body=${result.bodyRef.path}`);
+    }
+  }
+  const verdict =
+    member.expectedKind === 'review' || member.expectedKind === 'test'
+      ? ', verdict: "passed" | "failed" | "blocked" required'
+      : '';
+  lines.push(
+    `Host requirement — When your work for this input is complete (or blocked), you MUST call the agent_report tool (expected kind: "${member.expectedKind}"${verdict}). A prose-only reply without calling agent_report fails this input as REPORT_MISSING.`,
+  );
+  return lines.join('\n');
+}
+
+/** One Plan read and one scope check per dispatch, shared by every member of the batch. */
+function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelopeFacts {
+  const planText = task.planRef === null ? undefined : readPlan(task.planRef).text;
+  const upstream =
+    task.phase === 'review' || task.phase === 'test' || task.phase === 'settle'
+      ? latestUpstream(context.store, task)
+      : [];
+  return {
+    ...(task.planRef !== null ? { planPath: task.planRef.path } : {}),
+    ...(planText !== undefined ? { acceptance: acceptanceText(planText) } : {}),
+    ...(planText !== undefined
+      ? { scopeLine: scopeCheckText(scopeCheckFor(context.cwd, planText)) }
+      : {}),
+    upstream,
+  };
+}
+
+/** The latest report of each kind that earlier phases delivered, so a member need not fetch them. */
+function latestUpstream(store: Store, task: TaskRow): readonly ResultRow[] {
+  const kinds = ['implementation', 'review', 'test'] as const;
+  const results = store.listTaskResults(task.id);
+  return kinds.flatMap((kind) => {
+    const latest = results.filter((entry) => entry.kind === kind).at(-1);
+    return latest === undefined ? [] : [latest];
+  });
+}
+
+function withDispatchEnvelope(instructions: string, envelope: string): string {
+  return `${instructions}\n\n${envelope}`;
 }
 
 export interface MemberState {
@@ -84,6 +162,7 @@ interface PlannedContinuation {
   readonly refs: readonly string[];
   readonly dependencies: readonly string[];
   readonly inputId: string;
+  readonly inputPayload: unknown;
 }
 
 /**
@@ -103,7 +182,6 @@ export async function dispatchOp(
     return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
   }
 
-  const scopeNote = scopeNoteFor(context, task);
   const waitMs = clampWait(params['waitTimeoutMs']);
   if (params['sessions'] !== undefined && !Array.isArray(params['sessions'])) {
     return fail('INVALID_ARGUMENT', 'sessions must be a list of entries (omit it to only wait)');
@@ -118,6 +196,8 @@ export async function dispatchOp(
       ...guidanceFor(context.store, current),
     } as Record<string, unknown>);
   }
+  // Only a real dispatch needs the host facts; a pure wait must not read the Plan or run git.
+  const facts = envelopeFacts(context, task);
 
   const created: PlannedMember[] = [];
   const continued: PlannedContinuation[] = [];
@@ -140,8 +220,16 @@ export async function dispatchOp(
         return enrich(invalid, dispatchRefusalFacts(context.store, task));
       }
       // The gate must see the kind the member will really deliver, not only an explicit field.
-      wantsTest = wantsTest || (readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId]) === 'test';
-      const memberInstructions = withScopeNote(readString(request, 'instructions') as string, scopeNote);
+      const expectedKind = readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId] ?? '';
+      const writeScope = readStringArray(request, 'writeScope') ?? [];
+      const refs = readStringArray(request, 'refs') ?? [];
+      wantsTest = wantsTest || expectedKind === 'test';
+      const instructions = readString(request, 'instructions') as string;
+      const envelope = buildDispatchEnvelope(
+        task,
+        { roleId, expectedKind, writeScope, refs, isContinuation: false },
+        facts,
+      );
       created.push({
         kind: 'create',
         member: {
@@ -153,17 +241,19 @@ export async function dispatchOp(
             : {}),
           phase: task.phase,
           label: readString(request, 'label') ?? roleId,
-          instructions: memberInstructions,
-          refs: readStringArray(request, 'refs') ?? [],
+          // The chief's own words, kept clean for the task detail and member drawer; the host
+          // envelope below is what Pi really receives.
+          instructions,
+          refs,
           dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
-          expectedKind: readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId] ?? '',
-          writeScope: readStringArray(request, 'writeScope') ?? [],
+          expectedKind,
+          writeScope,
           ...(readString(request, 'workspaceRef') !== undefined
             ? { workspaceRef: readString(request, 'workspaceRef') as string }
             : {}),
           inputId: `i-${randomUUID().slice(0, 8)}`,
           inputPayload: {
-            content: [{ type: 'text', text: memberInstructions }],
+            content: [{ type: 'text', text: withDispatchEnvelope(instructions, envelope) }],
           },
         },
       });
@@ -201,13 +291,28 @@ export async function dispatchOp(
       });
     }
     wantsTest = wantsTest || member.expectedKind === 'test';
+    const refs = readStringArray(request, 'refs') ?? [];
+    const envelope = buildDispatchEnvelope(
+      task,
+      {
+        roleId: member.roleId,
+        expectedKind: member.expectedKind,
+        writeScope: member.writeScope,
+        refs,
+        isContinuation: true,
+      },
+      facts,
+    );
     continued.push({
       kind: 'continue',
       sessionId: sessionId as string,
-      instructions: withScopeNote(instructions, scopeNote),
-      refs: readStringArray(request, 'refs') ?? [],
+      instructions,
+      refs,
       dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
       inputId: `i-${randomUUID().slice(0, 8)}`,
+      inputPayload: {
+        content: [{ type: 'text', text: withDispatchEnvelope(instructions, envelope) }],
+      },
     });
   }
 
@@ -233,6 +338,7 @@ export async function dispatchOp(
         refs: entry.refs,
         dependencies: entry.dependencies,
         inputId: entry.inputId,
+        inputPayload: entry.inputPayload,
       })),
     });
   } catch (error) {

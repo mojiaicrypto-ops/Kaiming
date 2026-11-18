@@ -18,6 +18,8 @@
 
 #### P0-1：专业成员派发信封与 `REPORT_MISSING` 同回合自愈（升级原 R6）
 
+**状态**：已实施（2026-11-18）。实际签名 `buildDispatchEnvelope(task, member, facts)`（纯函数，调用方一次读 Plan、一次范围核对）；隐藏 turn 类型统一在 `model-output-guard.ts`。证据见[验证记录](validation.md#2026-11-18--p0-1-派发信封与同回合补交升级-r6)。
+
 - **问题与根因**：
   1. `src/tools/delegation-tools.ts` 在 `dispatchOp` 中构造子 Session 输入时，只把 Chief 手写的 `instructions`（仅在 `review/test/settle` 阶段末尾拼一行 `scopeNoteFor`）放进 `inputPayload`。子 Agent 启动后必须先花 2～3 个模型回合调用 `task(op=get)` 和 `read` 去查 Task 目标、Plan 路径与验收标准。
   2. 若 Chief 在 `instructions` 中只描述报告形状（如“输出 N 行结论”）而漏写 `agent_report` 工具名，或模型把结论直接打成普通文本结束（suangua 现场占 Reviewer 的 16.5%），`src/runtime/runner.ts`（第 901～910 行）直接将输入标为 `failed / REPORT_MISSING`，迫使唤醒 Chief 再跨会话重派一轮。

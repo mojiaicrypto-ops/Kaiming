@@ -60,6 +60,8 @@ write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`
 
 **dispatch**：只组织当前步骤。有 sessions 即派发：每项 roleId 与 sessionId 恰有一个——roleId 新建专业 Session，sessionId 对已停稳成员追加剩余工作；**instructions 只有一个位置**。新建成员省略 label/expectedKind 时由宿主按 roleId 取值（不给模型增加必填项）。不带 sessions 表示仅等待当前步骤。整批接纳原子，不出现半批。
 
+派发时宿主把**信封**写进该输入的 Pi payload，而不是 `instructions` 列：Task 身份（type/workKind/phase/role/expectedKind）、目标、新建成员的计划路径与验收摘要（上限 1500 字符）、当前范围核对、分配的 writeScope 与引用、Review/Test/Settle 阶段的最新上游报告（kind/resultId/verdict/body 路径），以及固定的 `agent_report` 收尾契约（review/test 必须带 verdict）。`task_sessions.instructions` 仍只存主管原话，成员抽屉与任务详情不被宿主事实刷屏；续办沿用同一信封。这样成员不必先花回合 `task(op=get)` / 读 Plan 才能开工。
+
 并行规则（BL-07/D-01）：只读工作可任意并行；写工作允许同一 Task 内按模块并行，每个写成员必须声明 writeScope（项目相对路径或 glob）。程序只核对范围**重叠**并告警，不拦截——是否可并行、如何分工由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本，不在本版。
 
 程序按 M2 等待当前步骤全部成员停稳再聚合报告/异常。超时返回状态快照与明确的「继续等待」提示，不 abort 子工作；主管在成员仍运行/排队/等用户时须在同一回合同再次 dispatch 空名单，不得以状态说明结束回合；waitTimeoutMs 缺省 120 秒，按 1–300 秒夹取。不得并发 prompt 同一成员，不续办仍 queued/working/waiting_user/stopping 的成员，不重复已完成成果。暂停/中断 Task 的只读恢复只允许 investigator + expectedKind=recovery。Test 派发前程序核对存在 passed 的独立复核且其步骤成员已停稳，否则 STAGE_NOT_READY；Review 与 Test 不混合同步启动。
@@ -79,6 +81,8 @@ write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`
 body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write Task 内的 investigation/recovery 只读报告写 Server，其余 write 报告写项目 `.dev/work/<taskId>/<sessionId>/`；提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。唯一例外是结算报告：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07），再以相同 body 提交报告；程序发现已有文件内容不同则拒绝，不会改写已提交正文。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
 
 The host checks the formal report against the input that is ending. A member whose input settles without a result for its `expectedKind` is recorded as `failed` / `REPORT_MISSING`, not `completed`; `task.get`, dispatch member state and the Task detail expose that fact, and completion refuses it. The supervisor should continue that same Session with a report-only instruction (same phase) instead of dispatching a replacement review; the missing report is never treated as a pass.
+
+正常结束却没有报告时，宿主先发一次隐藏补交提醒（`display=false`，不进浏览器转录），让成员就已完成的工作补交正式报告；补交成功该输入以 `completed` 落盘。仍无报告才记 `REPORT_MISSING`——补交只有一次，不会循环，也不会把无报告当成通过。
 
 Review/Test checks are evidence only when actually run. A negative control is recorded `passed` only when its command ran, the known-bad sample was rejected for the expected reason, and `reason` states the bad sample, expected rejection reason, observed rejection and oracle source; `evidenceRefs` carries the acceptance/invariant reference. An unexpected failure stays `failed`. A checker/auditor must self-test with a known-bad sample. A suite with only positive cases, or with expected values copied from current output, is incomplete; the Reviewer reports that as blocking rather than trusting an all-green count. The program records the checks and their status but does not infer oracle quality from their names; that judgment stays with Review/Test and the supervisor (D-05).
 

@@ -141,6 +141,12 @@ const member = (overrides: Record<string, unknown> = {}): Record<string, unknown
   ...overrides,
 });
 
+/** The text a dispatched member's input really carries (the payload is a JSON document). */
+function payloadText(payload: string | undefined): string {
+  const parsed = JSON.parse(payload ?? '{}') as { content?: Array<{ text?: string }> };
+  return (parsed.content ?? []).map((part) => part.text ?? '').join('\n');
+}
+
 async function moveToPhase(f: Fixture, phase: string): Promise<void> {
   const task = f.store.listTasks('p-1')[0];
   const update = f.taskTool;
@@ -167,6 +173,87 @@ describe('task dispatch', () => {
     expect(f.dispatchCalls).toEqual([members[0]?.sessionId]);
     expect(f.settleCalls).toEqual([{ taskId: task?.id, timeoutMs: 120_000 }]);
     expect(result.details['outcome']).toBe('completed');
+  });
+
+  it('gives a new member the host envelope in its payload and keeps its instructions clean', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+    const task = f.store.listTasks('p-1')[0];
+
+    const result = await f.taskTool.execute('call-1', {
+      op: 'dispatch',
+      sessions: [member({ instructions: 'implement the reset flow', writeScope: ['src/'] })],
+    });
+
+    expect(result.isError).toBe(false);
+    const row = f.store.listTaskSessions(task?.id ?? '')[0];
+    // The drawer and task detail show the chief's words, never the host's facts.
+    expect(row?.instructions).toBe('implement the reset flow');
+    const delivered = payloadText(f.store.getInput(row?.currentInputId ?? '')?.payload);
+    expect(delivered).toContain('implement the reset flow');
+    expect(delivered).toContain('Goal: reset password');
+    expect(delivered).toContain('.dev/work/');
+    expect(delivered).toContain('Acceptance (from the Plan): - observable result');
+    expect(delivered).toContain('Scope: not declared');
+    expect(delivered).not.toContain('Scope: Scope');
+    expect(delivered).toContain('Assigned writeScope: src/');
+    expect(delivered).toContain('expected kind: "implementation"');
+    expect(delivered).toContain('REPORT_MISSING');
+    // A first dispatch has no earlier reports to summarize.
+    expect(delivered).not.toContain('Upstream results:');
+  });
+
+  it('names the upstream report paths for a review-phase dispatch', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+    const task = f.store.listTasks('p-1')[0];
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
+    const developer = f.store.listTaskSessions(task?.id ?? '')[0];
+    const claimed = f.store.claimNextInput(developer?.sessionId ?? '');
+    if (claimed.kind !== 'claimed') {
+      throw new Error('the member input could not be claimed');
+    }
+    f.store.finishInput({
+      inputId: claimed.input.inputId,
+      expectedRevision: claimed.input.revision,
+      status: 'completed',
+    });
+    const implementation = f.store.recordResult({
+      resultId: 'r-impl',
+      taskId: task?.id ?? '',
+      sessionId: developer?.sessionId ?? '',
+      inputId: claimed.input.inputId,
+      roleId: 'developer',
+      kind: 'implementation',
+      summary: 'implemented the reset flow',
+      bodyRef: { storage: 'server', path: '/work/impl.md', sha256: 'h' },
+      basisRefs: [],
+      checks: [],
+    });
+
+    await moveToPhase(f, 'review');
+    const dispatched = await f.taskTool.execute('call-2', {
+      op: 'dispatch',
+      sessions: [
+        member({
+          roleId: 'reviewer',
+          label: 'review',
+          instructions: 'review it',
+          expectedKind: 'review',
+          writeScope: [],
+        }),
+      ],
+    });
+
+    expect(dispatched.isError).toBe(false);
+    const reviewer = f.store
+      .listTaskSessions(task?.id ?? '')
+      .find((entry) => entry.roleId === 'reviewer');
+    const delivered = payloadText(f.store.getInput(reviewer?.currentInputId ?? '')?.payload);
+    // The reviewer can open the implementation directly instead of calling task(op=get) first.
+    expect(delivered).toContain(`implementation ${implementation.resultId}`);
+    expect(delivered).toContain('body=/work/impl.md');
+    expect(delivered).toContain('verdict: "passed" | "failed" | "blocked" required');
   });
 
   it('refuses a role outside the current phase and a report kind a read Task cannot ask for', async () => {
@@ -250,6 +337,13 @@ describe('task dispatch', () => {
     expect(after?.currentInputId).not.toBe(settled?.currentInputId);
     expect(f.store.getInput(after?.currentInputId ?? '')?.kind).toBe('continuation');
     expect(f.dispatchCalls).toEqual([settled?.sessionId]);
+    // A continuation keeps the chief's words in its row and receives the same host contract.
+    expect(after?.instructions).toBe('fix the finding');
+    const continuedText = payloadText(f.store.getInput(after?.currentInputId ?? '')?.payload);
+    expect(continuedText).toContain('fix the finding');
+    expect(continuedText).toContain('Goal: reset password');
+    expect(continuedText).toContain('expected kind: "implementation"');
+    expect(continuedText).toContain('REPORT_MISSING');
 
     // A member that is still queued must not be continued.
     const running = f.store.listTaskSessions(task?.id ?? '')[0];

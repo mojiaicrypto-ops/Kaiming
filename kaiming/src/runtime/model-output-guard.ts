@@ -24,8 +24,13 @@
  */
 import type { ExtensionAPI, ExtensionFactory, MessageEndEvent, ToolCallEvent } from '@earendil-works/pi-coding-agent';
 
-/** Hidden custom message used for the one bounded corrective turn. */
+/** Hidden custom messages the runner injects as one-off corrective turns. */
 export const MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE = 'kaiming.model-output-correction';
+export const REPORT_MISSING_RECOVERY_CUSTOM_TYPE = 'kaiming.report-missing-recovery';
+const HIDDEN_TURN_CUSTOM_TYPES: ReadonlySet<string> = new Set([
+  MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE,
+  REPORT_MISSING_RECOVERY_CUSTOM_TYPE,
+]);
 
 /** The store's typed terminal code for a discarded model response. */
 export const MODEL_OUTPUT_CORRUPTED = 'MODEL_OUTPUT_CORRUPTED';
@@ -224,13 +229,13 @@ export function createModelOutputGuardExtension(active: () => ModelOutputGuard |
   };
 }
 
-/** True for the hidden corrective turn; the browser already has the terminal failure/notice. */
-export function isHiddenModelOutputCorrectionEvent(event: unknown): boolean {
+/** True for a hidden corrective turn; the browser already has the terminal failure/notice. */
+export function isHiddenInternalTurnEvent(event: unknown): boolean {
   if (typeof event !== 'object' || event === null || !('type' in event)) return false;
   if (event.type !== 'message_start' && event.type !== 'message_end' && event.type !== 'message_update') return false;
   if (!('message' in event) || typeof event.message !== 'object' || event.message === null) return false;
   const message = event.message;
   if (!('role' in message) || message.role !== 'custom') return false;
-  if (!('customType' in message) || message.customType !== MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE) return false;
-  return true;
+  if (!('customType' in message) || typeof message.customType !== 'string') return false;
+  return HIDDEN_TURN_CUSTOM_TYPES.has(message.customType);
 }

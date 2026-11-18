@@ -2917,6 +2917,7 @@ export class Store {
       readonly refs: readonly string[];
       readonly dependencies: readonly string[];
       readonly inputId: string;
+      readonly inputPayload?: unknown;
     }>;
   }): TaskSessionRow[] {
     return this.transaction(() => {
@@ -3015,6 +3016,8 @@ export class Store {
     readonly refs: readonly string[];
     readonly dependencies: readonly string[];
     readonly inputId: string;
+    /** What Pi really receives; defaults to the instructions, as a user input would. */
+    readonly inputPayload?: unknown;
   }): TaskSessionRow {
     return this.transaction(() => {
       const member = this.requireTaskSession(params.sessionId);
@@ -3038,7 +3041,7 @@ export class Store {
         requestKey: params.inputId,
         method: 'task.session',
         kind: 'continuation',
-        payload: { content: [{ type: 'text', text: params.instructions }] },
+        payload: params.inputPayload ?? { content: [{ type: 'text', text: params.instructions }] },
       });
       return this.requireTaskSession(params.sessionId);
     });

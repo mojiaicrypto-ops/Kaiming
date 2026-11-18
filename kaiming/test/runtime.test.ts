@@ -72,6 +72,8 @@ async function harness(options: {
   bashTimeoutSeconds?: number;
   /** Runs the runner started outside the worker (the chief's dispatch tool). */
   onRunSettled?: (sessionId: string, outcome: RunOutcome) => void;
+  /** Raw Pi event stream, for tests that assert what the browser would never see. */
+  onEvent?: (sessionId: string, event: unknown) => void;
 }): Promise<Harness> {
   const server = await startStubModelServer(options.replies);
   servers.push(server);
@@ -117,6 +119,9 @@ async function harness(options: {
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
     ...(options.bashTimeoutSeconds !== undefined ? { bashTimeoutSeconds: options.bashTimeoutSeconds } : {}),
     ...(options.onRunSettled !== undefined ? { onRunSettled: options.onRunSettled } : {}),
+    ...(options.onEvent !== undefined
+      ? { onEvent: (sessionId: string, event: unknown) => options.onEvent?.(sessionId, event) }
+      : {}),
   });
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
 }
@@ -134,6 +139,22 @@ function accept(store: Store, inputId: string, requestKey: string, taskId?: stri
     kind: 'user',
     payload: { content: [{ type: 'text', text: 'hello' }] },
   });
+}
+
+/** The parts of a `custom` message the tests assert on, read only after runtime checks. */
+function customMessageOf(
+  event: unknown,
+): { readonly customType?: string; readonly display?: boolean } | undefined {
+  if (typeof event !== 'object' || event === null || !('message' in event)) return undefined;
+  const message = event.message;
+  if (typeof message !== 'object' || message === null) return undefined;
+  if (!('role' in message) || message.role !== 'custom') return undefined;
+  return {
+    ...('customType' in message && typeof message.customType === 'string'
+      ? { customType: message.customType }
+      : {}),
+    ...('display' in message && typeof message.display === 'boolean' ? { display: message.display } : {}),
+  };
 }
 
 describe('effective configuration', () => {
@@ -1826,8 +1847,94 @@ describe('input runner', () => {
     expect(ended).toMatchObject({ ok: true });
     expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
   }, 60_000);
+  it('asks once for a missing report and completes when the member delivers it', async () => {
+    const events: Array<{ readonly customType?: string; readonly display?: boolean }> = [];
+    const h = await harness({
+      replies: [
+        { kind: 'text', text: 'All checks passed' },
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'agent_report',
+              arguments: JSON.stringify({
+                summary: 'the reset flow is untested',
+                body: '# investigation\n\nread the reset path; no test covers it\n',
+                checks: [{ name: 'read the sources', status: 'passed' }],
+              }),
+            },
+          ],
+        },
+        // A tool call continues the loop; the stub must also answer the turn after the report.
+        { kind: 'text', text: 'report submitted' },
+      ],
+      onEvent: (_sessionId, event) => {
+        const message = customMessageOf(event);
+        if (message !== undefined) events.push(message);
+      },
+    });
+    // A read Task keeps the check on the report contract alone (no delivery snapshot needs Git).
+    const task = h.store.createTask({
+      id: 't-self-heal',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'read',
+      workKind: 'investigate',
+      requiresTest: false,
+      goal: 'investigate the reset flow',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'analyze' });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-investigator-self-heal',
+          taskId: task.id,
+          roleId: 'investigator',
+          phase: 'analyze',
+          label: 'investigate',
+          instructions: 'report what really exists',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'investigation',
+          inputId: 'i-investigator-self-heal',
+          inputPayload: { content: [{ type: 'text', text: 'report what really exists' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-investigator-self-heal');
+
+    // The work was done in the first turn: the host asks once for the report instead of failing.
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-investigator-self-heal')?.status).toBe('completed');
+    const results = h.store.resultsForInputs(['i-investigator-self-heal']);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: 'investigation', roleId: 'investigator' });
+    // The reminder is context for the model only: hidden from the browser by display:false.
+    const reminder = events.find((event) => event.customType === 'kaiming.report-missing-recovery');
+    expect(reminder?.display).toBe(false);
+  }, 60_000);
+
   it('marks a one-line answer without the dispatched report as failed', async () => {
-    const h = await harness({ replies: [{ kind: 'text', text: 'passed' }] });
+    const events: Array<{ readonly customType?: string; readonly display?: boolean }> = [];
+    const h = await harness({
+      replies: [
+        { kind: 'text', text: 'passed' },
+        { kind: 'text', text: 'still no report' },
+      ],
+      onEvent: (_sessionId, event) => {
+        const message = customMessageOf(event);
+        if (message !== undefined) events.push(message);
+      },
+    });
     const task = h.store.createTask({
       id: 't-no-report',
       projectId: 'p-1',
@@ -1874,6 +1981,12 @@ describe('input runner', () => {
     });
     expect(h.store.resultsForInputs(['i-review-no-report'])).toEqual([]);
     expect(h.store.getTaskSession('s-review-no-report')?.currentInputId).toBe('i-review-no-report');
+    // The reminder ran once: the persisted history carries just that one hidden turn, so a second
+    // prose-only answer is not silently accepted as a report and the loop did not repeat.
+    const history = readFileSync(h.store.getSessionBinding('s-review-no-report')?.piFile ?? '', 'utf8');
+    expect(history.match(/kaiming\.report-missing-recovery/g) ?? []).toHaveLength(1);
+    // A review member is told the verdict field is required.
+    expect(history).toContain('plus `verdict`');
   }, 30_000);
 
   it('terminates a member run after five failed report attempts, one corrective turn, and five more', async () => {

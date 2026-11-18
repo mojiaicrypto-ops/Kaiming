@@ -36,6 +36,7 @@ import {
   ModelOutputGuard,
   REPORT_RETRY_EXHAUSTED,
   MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE,
+  REPORT_MISSING_RECOVERY_CUSTOM_TYPE,
   createModelOutputGuardExtension,
 } from './model-output-guard.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
@@ -219,7 +220,16 @@ export class InputRunner {
     this.hostAborts.add(abortKey(sessionId, inputId));
   }
 
-  /** Claim and run the next input of a session; returns what was actually observed. */
+  /**
+   * A run waits on the user (a question on screen) or on a dispatched step; neither is a stalled
+   * provider. The same predicate covers the chief's settle wait and a member's own question.
+   */
+  private waitingOnUser(sessionId: string): boolean {
+    return (
+      this.interactions.isWaiting(sessionId) || (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0
+    );
+  }
+
   /**
    * `prompt()` under the run watchdog: a provider/stream that stops producing (or a run that
    * never ends) aborts and reports a watchdog failure, so the input reaches a terminal state
@@ -238,13 +248,8 @@ export class InputRunner {
       prompt: () => handle.session.prompt(text, images.length > 0 ? { images: [...images] } : undefined),
       abort: () => handle.session.abort(),
       activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
-      // A question on screen means the run waits on the user: that wait is not a stalled provider.
-      // The same holds while the chief waits on a dispatched step: the slow work belongs to member
-      // runs with their own watchdogs, so charging it here would abort every Task longer than the
-      // total window. The model's own generation still counts.
-      waiting: () =>
-        this.interactions.isWaiting(sessionId) ||
-        (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0,
+      // A question on screen, or a chief waiting on a dispatched step, is not a stalled provider.
+      waiting: () => this.waitingOnUser(sessionId),
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });
@@ -292,12 +297,60 @@ export class InputRunner {
         ),
       abort: () => handle.session.abort(),
       activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
-      waiting: () =>
-        this.interactions.isWaiting(sessionId) ||
-        (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0,
+      waiting: () => this.waitingOnUser(sessionId),
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });
+  }
+
+  /**
+   * One hidden turn when a member stopped normally without its formal report: the work is already
+   * done, so ask for the report instead of failing the input and burning a chief round trip.
+   * Bounded by construction: the caller runs this at most once per input, and a second prose-only
+   * answer still falls through to the existing REPORT_MISSING classifier.
+   */
+  private async recoverMissingReport(
+    handle: PiSessionHandle,
+    sessionId: string,
+    guard: ModelOutputGuard,
+    inputId: string,
+  ): Promise<void> {
+    const member = this.options.store.getTaskSession(sessionId);
+    if (member === undefined || member.currentInputId !== inputId) return;
+    if (this.options.store.resultsForInputs([inputId]).length > 0) return;
+    const live = this.options.store.getInput(inputId);
+    if (live === undefined || live.stopRequestKey !== null) return;
+    if (this.hostAborts.has(abortKey(sessionId, inputId))) return;
+    if (guard.fault !== undefined) return;
+    const last = handle.session.messages[handle.session.messages.length - 1];
+    if (last?.role !== 'assistant' || last.stopReason === 'error' || last.stopReason === 'aborted') return;
+    const verdict =
+      member.expectedKind === 'review' || member.expectedKind === 'test' ? ', plus `verdict`' : '';
+    await handle.session.waitForIdle();
+    this.lastEventAt.set(sessionId, Date.now());
+    await runWithWatchdog({
+      prompt: () =>
+        handle.session.sendCustomMessage(
+          {
+            customType: REPORT_MISSING_RECOVERY_CUSTOM_TYPE,
+            content: [
+              {
+                type: 'text',
+                text: `You ended your response without calling \`agent_report\`. Submit your formal "${member.expectedKind}" report now by calling the agent_report tool with \`summary\` and \`body\`${verdict} based on the work you already completed; do not redo the work.`,
+              },
+            ],
+            display: false,
+          },
+          { triggerTurn: true },
+        ),
+      abort: () => handle.session.abort(),
+      activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
+      waiting: () => this.waitingOnUser(sessionId),
+      stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
+      totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
+    });
+    // A degenerate answer to the reminder is handled by the same one-shot recovery as any other.
+    if (guard.fault !== undefined) await this.recoverModelOutput(handle, sessionId, guard, inputId);
   }
 
   /**
@@ -829,6 +882,8 @@ export class InputRunner {
       try {
         await this.promptWithWatchdog(handle, sessionId, promptText, images);
         await this.recoverModelOutput(handle, sessionId, modelGuard, input.inputId);
+        // The work may already be done: ask once for the owed report before failing the input.
+        await this.recoverMissingReport(handle, sessionId, modelGuard, input.inputId);
       } finally {
         // Also the path of a failed or stopped run: the responses that did complete were paid for.
         stopWatchingUsage();

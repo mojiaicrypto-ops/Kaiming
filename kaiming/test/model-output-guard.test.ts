@@ -5,9 +5,10 @@ import {
   MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE,
   ModelOutputGuard,
   REPORT_FAILURE_LIMIT,
+  REPORT_MISSING_RECOVERY_CUSTOM_TYPE,
   REPORT_RETRY_EXHAUSTED,
   createModelOutputGuardExtension,
-  isHiddenModelOutputCorrectionEvent,
+  isHiddenInternalTurnEvent,
   toolArgumentLimit,
 } from '../src/runtime/model-output-guard.ts';
 
@@ -275,12 +276,12 @@ describe('extension bridge', () => {
   });
 
   it('recognizes only the private corrective message frames', () => {
-    expect(
-      isHiddenModelOutputCorrectionEvent({
-        type: 'message_end',
-        message: { role: 'custom', customType: MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE },
-      }),
-    ).toBe(true);
-    expect(isHiddenModelOutputCorrectionEvent({ type: 'message_end', message: { role: 'assistant' } })).toBe(false);
+    for (const customType of [MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE, REPORT_MISSING_RECOVERY_CUSTOM_TYPE]) {
+      expect(isHiddenInternalTurnEvent({ type: 'message_end', message: { role: 'custom', customType } })).toBe(true);
+    }
+    expect(isHiddenInternalTurnEvent({ type: 'message_end', message: { role: 'custom', customType: 'other' } })).toBe(
+      false,
+    );
+    expect(isHiddenInternalTurnEvent({ type: 'message_end', message: { role: 'assistant' } })).toBe(false);
   });
 });
