@@ -28,3 +28,10 @@ Prompt bodies are cached per process (`runner.bodiesFor`): the `settler.md` chan
 
 - `resultId` now digests the effective body, so the same settlement submitted with or without a parameter body maps to the same result id when the disk bytes are identical (intended: a retry is a retry).
 - The reminder's settlement branch is a small runner-text change beyond the plan's file list; recorded because the reminder is exactly the turn that re-created the incident.
+
+## Post-review fixes (2026-11-18)
+
+- End-to-end coverage of the schema change: a settler runs through a real Pi session and calls `agent_report` with no `body` after writing `settlement.md`; the result is recorded from the file. Reverting `required` to include `body` fails at Pi's schema gate.
+- `prompts/settler.md` flow block, `prompts/specialists.md` (injected into every specialist) and the S6 settlement sequence in `storage-and-recovery.md` no longer demand a body.
+- One `reportFields(sessionId)` clause feeds both hidden turns, so the `REPORT_RETRY_EXHAUSTED` reminder no longer tells a settler that a body is mandatory.
+- Tests: empty-file fallback asserts `bodySource: 'param'` and that the parameter body is written; the missing-file refusal asserts the fallback sentence; the settler reminder test asserts `failed`/`REPORT_MISSING`, exactly one reminder, and the absence of the generic demand.

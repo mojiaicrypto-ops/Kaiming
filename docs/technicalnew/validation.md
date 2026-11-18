@@ -105,3 +105,10 @@
 - **实现**：`delegation-tools.ts` 缺省等待改为 600 秒、上限 1_800 秒（下限 1 秒不变）。`write-methods.ts` 新增 `wakeSettledStep`：沿用 `wakeForSettledStep` 的全部去重/忙/Task 状态规则，成功时使主管会话失效并在 queued 停止路径立即 `notify()`；wake 抛错不会让已完成的转换变成 RPC 失败。主管回合内自己调用 control/recover 不另行唤醒（它正在 processing，结果必为 `chief-busy`）。
 - **证据**：`test/server-write.test.ts` 三条正向路径各断言恰好一条 `notice-step-*`、其 `taskId` 属于本 Task、主管会话被 invalidate；负向控制两条——同步骤仍有 queued 成员时零通知、Task 暂停时零通知。`test/delegation.test.ts` 断言缺省 600_000 与上限夹取 1_800_000。独立 Test 逐条删除三个唤醒调用点，对应用例均按预期变红并逐字节还原；把 `UNSETTLED` 改成只认 `processing` 时负向控制变红。定向 4 文件 59 用例、`tsc --noEmit` 通过。独立 Review 结论 pass，四条 P3（停止路径漏 `notify`、invalidate 未测、暂停负向缺失、R3 路由措辞）均已修复。
 - **边界**：wake 抛错分支只靠代码检视；pause/cancel 与 `input.taskId === null` 短路没有 RPC 级用例；主管在回合内用 `task(op=recover)` 关闭中断成员后若直接结束回合，仍属既有空档（唤醒发生时主管已在 processing），不改动。
+
+### 2026-11-18 · P0-2 结算单写对齐（磁盘正文权威）
+
+- **根因**：`agent_report` 强制 `body` 必填，且结算文件内容与参数不一致即 `VERSION_CONFLICT`，逼 Settler 把数千字 Markdown 逐字塞回 JSON 参数——11-13 事故（48 连败）的直接诱因。
+- **决策与实现**（与用户确认）：写 Task 的 `<taskId>/<sessionId>/settlement.md` 已存在且非空时，它就是唯一正文——`body` 可省略、传了也不生效、磁盘字节不被改写，结果带 `bodySource: 'disk'`；文件缺失或为空时仍要求非空 `body` 并写入（`bodySource: 'param'`）。`resultId`、`bodyRef`、写盘与回读统一使用 `effectiveBody`，`VERSION_CONFLICT` 分支删除。`runner.ts` 的补交提醒与重试纠正 turn 共用 `reportFields`：结算成员被告知“已提交的 settlement.md 即正文，仅文件缺失时才传 body”。`settler.md` 流程块、`specialists.md` 与 S6 结算序列同步，不再要求正文。
+- **证据**：`test/report.test.ts` 磁盘权威（省略 body → 记录、`bodyRef.sha256` 等于文件摘要、文件 inode/字节不变；传入不同 body 仍以磁盘为准）与负向控制（无文件/空文件省略 body → `INVALID_ARGUMENT` 且零结果；非结算种类仍要求 body）；`test/runtime.test.ts` 真实 Pi + stub 端到端——settler 不带 body 调 `agent_report` 通过 schema 校验并落盘（回退 schema 即失败），以及两次纯文本仍记 `REPORT_MISSING` 且提醒恰好一次、指向 settlement.md。独立 Test 的四个变异（参数优先、`body ?? diskBody`、去掉磁盘读取、去掉提醒分支）均按预期变红并逐字节还原；定向 4 文件 107 用例、`check:prompts` 15/15。独立 Review 结论 pass；三条阻断性发现（schema 无负向控制、其余注入提示仍索要正文、纠正 turn 仍称 body 必填）已修复。
+- **边界**：结算文件“已写未提交”仍被接受——工具不核对 Git，提交由完成门禁检查（非目标）；磁盘读取与写盘守卫之间存在理论 TOCTOU（既有模式，窗口可忽略）；prompt 正文按进程缓存，`settler.md`/`specialists.md` 改动需重启 workbench 生效。
