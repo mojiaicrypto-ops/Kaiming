@@ -38,6 +38,7 @@
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |
 | session.create | projectId | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取；初始标题为空，读取时若未自定义改名则由首条用户输入派生 |
 | session.rename | projectId、sessionId、expectedRevision、title | 修改主管会话显示名（上限 60 字符，空白归一化后为空则清除自定义名、恢复首条用户输入派生；CAS 校验 revision，子会话拒绝） |
+| session.fork | projectId、sessionId、title? | 把主管会话当前分支复制成新会话（新 Pi JSONL，头部记录父会话；原文件与会话不变）。源必须是本项目的 chief、无 queued/processing/interrupted 输入、且已有持久化历史；空会话、子会话、忙会话分别拒绝（INVALID_ARGUMENT / WORKSPACE_BUSY），历史文件缺失报 HISTORY_UNAVAILABLE。允许源仍有未结束 Task 但不继承：新会话 currentTaskId/channel 为 null，无输入、无交互、无授权。标题缺省为「源标题 + `(fork)`」：源自定义名，或首条用户输入的首个非空行（与 rail 同一规则），基底为后缀留位；显式 `title` 归一化空白后使用（空字符串视为未提供），不加后缀。上限 60 个 UTF-16 单元（与 `session.rename` 同一口径，不劈开代理对）。分叉点取文件的当前 leaf（记录中的 branchEntryId 可能落后于压缩）。返回 `{sessionId, title, revision:1}`；行记录失败时删除已复制文件，不留孤儿历史 |
 | session.open | projectId、channel | 外部通道的**固定会话**：有就返回、没有才建（`created` 区分）；channel 为 1–32 位小写字母/数字/连字符；同一 (projectId, channel) 至多一条，靠部分唯一索引保证并发 |
 | session.get | projectId、sessionId | role、currentTaskId、activity、stopping、当前输入、等待原因、排队数、lastActivityAt、config{providerId,modelId,source}；activity=idle/queued/processing/stopping（stopping=已请求停止但尚未停稳）；config 取当前输入认领时记录的配置，只回这三个字段，不含服务端目录 |
 | session.list | projectId、limit?、cursor? | 会话列一次取齐：sessionId、roleId、revision（清理的 CAS 依据）、title（派生，60 码点截断）、channel（外部通道的固定会话，普通会话为 null）、activity、lastActivityAt、currentTaskId、queuedInputs；cursor 为 `lastActivityAt\|sessionId`；不调用 `stream.prepare`、不读历史文件 |

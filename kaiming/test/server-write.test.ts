@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -110,6 +110,7 @@ async function harness(
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
     compactSession: (sessionId) => runner.compactManually(sessionId),
     controlTask: (control) => runner.controlTask(control),
+    forkSessionFile: (params) => factory.branchSessionFile(params),
     invalidate: (sessionId, entity, id) => invalidations.push({ sessionId, entity, id }),
   });
   const workbench = createWorkbenchServer({ store, auth, router });
@@ -1175,4 +1176,269 @@ describe('compaction policy surface', () => {
     expect(nothing.status).toBe(200);
     expect(nothing.body['result']).toEqual({ status: 'nothing' });
   });
+});
+
+describe('session fork', () => {
+  it('copies a settled conversation and lets both sides advance independently', async () => {
+    const h = await harness([
+      { kind: 'text', text: 'FIRST-ANSWER' },
+      { kind: 'text', text: 'FORK-ANSWER' },
+      { kind: 'text', text: 'SOURCE-ANSWER' },
+    ]);
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: '开个话题' }] },
+      'fork-in-1',
+    );
+    await h.awaitOutcome('s-chief', 'completed');
+    const sourceBinding = h.store.getSessionBinding('s-chief');
+    const sourceBytes = readFileSync(sourceBinding?.piFile ?? '', 'utf8');
+
+    const forked = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+
+    expect(forked.status).toBe(200);
+    const created = resultOf<{ sessionId: string; title: string; revision: number }>(forked.body);
+    expect(created.revision).toBe(1);
+    expect(created.title).toContain('(fork)');
+    // The source binding and file bytes are untouched: a fork copies, it does not move.
+    expect(h.store.getSessionBinding('s-chief')?.piFile).toBe(sourceBinding?.piFile);
+    expect(readFileSync(sourceBinding?.piFile ?? '', 'utf8')).toBe(sourceBytes);
+
+    // The new row owns nothing: no Task, no channel, a history of its own.
+    expect(h.store.getSession(created.sessionId)).toMatchObject({
+      roleId: 'chief',
+      currentTaskId: null,
+      channel: null,
+    });
+    const forkBinding = h.store.getSessionBinding(created.sessionId);
+    expect(forkBinding?.hasHistory).toBe(true);
+    expect(forkBinding?.piFile).not.toBe(sourceBinding?.piFile);
+    expect(readFileSync(forkBinding?.piFile ?? '', 'utf8')).toContain('FIRST-ANSWER');
+    expect(h.invalidations).toContainEqual({ sessionId: created.sessionId, entity: 'session', id: created.sessionId });
+
+    // The fork reads the copied conversation through the normal transcript surface.
+    const listed = await h.call('session.messages.list', { projectId: h.projectId, sessionId: created.sessionId });
+    expect(listed.status).toBe(200);
+    expect((resultOf<{ messages: unknown[] }>(listed.body)).messages.length).toBeGreaterThan(0);
+
+    // Each side then advances alone.
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: created.sessionId, content: [{ type: 'text', text: 'FORK-ONLY' }] },
+      'fork-in-2',
+    );
+    await h.awaitOutcome(created.sessionId, 'completed');
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: 'SOURCE-ONLY' }] },
+      'fork-in-3',
+    );
+    await h.awaitOutcome('s-chief', 'completed');
+
+    const forkText = readFileSync(h.store.getSessionBinding(created.sessionId)?.piFile ?? '', 'utf8');
+    const sourceText = readFileSync(h.store.getSessionBinding('s-chief')?.piFile ?? '', 'utf8');
+    expect(forkText).toContain('FORK-ONLY');
+    expect(forkText).not.toContain('SOURCE-ONLY');
+    expect(sourceText).toContain('SOURCE-ONLY');
+    expect(sourceText).not.toContain('FORK-ONLY');
+  }, 60_000);
+
+  it('forks a source with an unfinished Task without inheriting it', async () => {
+    const h = await harness([{ kind: 'text', text: 'done' }]);
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: 'start a task' }] },
+      'fork-task-1',
+    );
+    await h.awaitOutcome('s-chief', 'completed');
+    h.store.createTask({
+      id: 't-fork',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'g',
+      scope: 's',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/p.md', sha256: 'x' },
+      authorizationRefs: [],
+      sourceInputId: 'fork-task-1',
+    });
+
+    const forked = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+
+    expect(forked.status).toBe(200);
+    const created = resultOf<{ sessionId: string }>(forked.body);
+    expect(h.store.getSession(created.sessionId)?.currentTaskId).toBeNull();
+    expect(h.store.getSession('s-chief')?.currentTaskId).toBe('t-fork');
+  }, 60_000);
+
+  it('refuses an empty, non-chief, busy or foreign source and records nothing', async () => {
+    const h = await harness([], { startWorker: false });
+    const cwd = h.store.getSession('s-chief')?.cwd ?? '';
+    h.store.createSession({ id: 's-empty', projectId: h.projectId, roleId: 'chief', cwd });
+    const before = h.store.listSessionSummaries(h.projectId).length;
+
+    const empty = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-empty' });
+    expect(empty.status).not.toBe(200);
+    expect(errorCode(empty.body)).toBe('INVALID_ARGUMENT');
+
+    const nonChief = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-dev' });
+    expect(nonChief.status).not.toBe(200);
+    expect(errorCode(nonChief.body)).toBe('INVALID_ARGUMENT');
+
+    // Busy: an accepted input has not settled yet.
+    h.store.acceptInput({
+      inputId: 'i-fork-busy',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:i-fork-busy',
+      requestKey: 'i-fork-busy',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'busy' }] },
+    });
+    const busy = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(busy.status).not.toBe(200);
+    expect(errorCode(busy.body)).toBe('WORKSPACE_BUSY');
+
+    const otherRoot = join(cwd, '..', 'other-project');
+    mkdirSync(otherRoot, { recursive: true });
+    h.store.createProject({ id: 'p-2', realPath: realpathSync(otherRoot) });
+    const foreign = await h.call('session.fork', { projectId: 'p-2', sessionId: 's-chief' });
+    expect(foreign.status).not.toBe(200);
+    expect(errorCode(foreign.body)).toBe('NOT_FOUND');
+
+    // No refusal left a session row behind.
+    expect(h.store.listSessionSummaries(h.projectId)).toHaveLength(before);
+  }, 30_000);
+
+  it('refuses a processing or interrupted input, not only a queued one', async () => {
+    const h = await harness([], { startWorker: false });
+    h.store.acceptInput({
+      inputId: 'i-fork-live',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:i-fork-live',
+      requestKey: 'i-fork-live',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'running' }] },
+    });
+    const claimed = h.store.claimNextInput('s-chief');
+    if (claimed.kind !== 'claimed') throw new Error('the input could not be claimed');
+    const live = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(errorCode(live.body)).toBe('WORKSPACE_BUSY');
+
+    h.store.finishInput({
+      inputId: claimed.input.inputId,
+      expectedRevision: claimed.input.revision,
+      status: 'interrupted',
+      errorCode: 'RUN_TIMEOUT',
+      errorMessage: 'the run was aborted',
+    });
+    const interrupted = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(errorCode(interrupted.body)).toBe('WORKSPACE_BUSY');
+  }, 30_000);
+
+  it('refuses a binding that never carried history, and a history file that is gone', async () => {
+    const h = await harness([], { startWorker: false });
+    const cwd = h.store.getSession('s-chief')?.cwd ?? '';
+    // A binding recorded without history is an empty conversation, even if a file path exists.
+    h.store.createSession({ id: 's-nohistory', projectId: h.projectId, roleId: 'chief', cwd });
+    h.store.recordSessionBinding({
+      sessionId: 's-nohistory',
+      piFile: join(cwd, 'never-written.jsonl'),
+      hasHistory: false,
+      configHash: 'c',
+    });
+    const before = h.store.listSessionSummaries(h.projectId).length;
+
+    const empty = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-nohistory' });
+    expect(empty.status).not.toBe(200);
+    expect(errorCode(empty.body)).toBe('INVALID_ARGUMENT');
+    expect(JSON.stringify(empty.body)).toContain('empty session');
+
+    // A binding that claims history whose file disappeared is a different fact: say so.
+    h.store.recordSessionBinding({
+      sessionId: 's-nohistory',
+      piFile: join(cwd, 'lost.jsonl'),
+      hasHistory: true,
+      configHash: 'c',
+    });
+    const gone = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-nohistory' });
+    expect(gone.status).not.toBe(200);
+    expect(errorCode(gone.body)).toBe('HISTORY_UNAVAILABLE');
+    expect(h.store.listSessionSummaries(h.projectId)).toHaveLength(before);
+  }, 30_000);
+
+  it('keeps the fork marker inside the title cap and honours an explicit title', async () => {
+    const h = await harness([{ kind: 'text', text: 'ok' }]);
+    const long = `long-topic-${'x'.repeat(90)}`;
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: long }] },
+      'fork-title-1',
+    );
+    await h.awaitOutcome('s-chief', 'completed');
+
+    const derived = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(derived.status).toBe(200);
+    const first = resultOf<{ title: string }>(derived.body);
+    expect(first.title.endsWith(' (fork)')).toBe(true);
+    // The cap is in UTF-16 units, the same one session.rename enforces.
+    expect(first.title.length).toBeLessThanOrEqual(60);
+
+    const named = await h.call('session.fork', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      title: `  ${'y'.repeat(80)}  `,
+    });
+    expect(named.status).toBe(200);
+    const second = resultOf<{ title: string }>(named.body);
+    // An explicit title is used as given (whitespace collapsed by the 60-point cap), not suffixed.
+    expect(second.title.startsWith('y')).toBe(true);
+    expect(second.title.endsWith('(fork)')).toBe(false);
+    expect(second.title.length).toBeLessThanOrEqual(60);
+
+    // Astral characters must not be split, and the stored name stays renameable (≤60 units).
+    const astral = await h.call('session.fork', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      title: '🜂'.repeat(40),
+    });
+    expect(astral.status).toBe(200);
+    const third = resultOf<{ title: string }>(astral.body);
+    expect(third.title.length).toBeLessThanOrEqual(60);
+    expect(third.title.endsWith('…')).toBe(true);
+    expect(third.title.isWellFormed()).toBe(true);
+  }, 60_000);
+
+  it('leaves no history file when the fork cannot be recorded', async () => {
+    const h = await harness([{ kind: 'text', text: 'ok' }]);
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: 'topic' }] },
+      'fork-orphan-1',
+    );
+    await h.awaitOutcome('s-chief', 'completed');
+    const sourceFile = h.store.getSessionBinding('s-chief')?.piFile ?? '';
+    const sessionsDir = dirname(sourceFile);
+    const before = readdirSync(sessionsDir).length;
+    // The rows are the record: if they cannot be written, the copied history must not survive.
+    const original = h.store.createForkedChiefSession.bind(h.store);
+    h.store.createForkedChiefSession = () => {
+      throw new Error('disk full');
+    };
+    try {
+      const failed = await h.call('session.fork', { projectId: h.projectId, sessionId: 's-chief' });
+      expect(failed.status).not.toBe(200);
+      expect(errorCode(failed.body)).toBe('STORAGE_UNAVAILABLE');
+    } finally {
+      h.store.createForkedChiefSession = original;
+    }
+    expect(readdirSync(sessionsDir)).toHaveLength(before);
+  }, 60_000);
 });

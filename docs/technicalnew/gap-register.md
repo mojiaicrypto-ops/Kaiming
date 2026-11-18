@@ -178,6 +178,8 @@
 
 #### P2-2：从当前主管会话 Fork 新会话（原 F1）
 
+**状态**：已实施（2026-11-18）。`session.fork(projectId, sessionId, title?)`；标题缺省「源标题 + `(fork)`」，上限 60 个 UTF-16 单元；分叉点取文件当前 leaf；行失败删除已复制文件。浏览器验收在 `browser/session-fork.spec.ts`（含拒绝 toast）。证据见[验证记录](validation.md#2026-11-18--p2-2-主管会话-fork原-f1)。
+
 - **背景与设计依据**：已归档草案 `.kaiming/work/fork-chief-session-20261101/plan.md`。当用户在一条主管会话中讨论出多个方向时，需要一键复制当前对话上下文到新会话并行推进，而不污染原会话或其绑定的 Task。
 - **修改文件与精确实现步骤**：
   1. **`kaiming/src/runtime/pi-runtime.ts`（分支会话文件生成）**：

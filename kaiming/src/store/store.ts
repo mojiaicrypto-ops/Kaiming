@@ -433,6 +433,8 @@ export interface CreateSessionParams {
   readonly specialization?: string;
   /** An external channel owns at most one session per project (unique index enforces it). */
   readonly channel?: string;
+  /** A name the host already decided (a fork inherits one); NULL keeps the derived title. */
+  readonly title?: string | null;
 }
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
@@ -937,7 +939,7 @@ export class Store {
 
   createSession(params: CreateSessionParams): void {
     const timestamp = this.clock();
-    this.stmt('INSERT INTO sessions (id, projectId, roleId, specialization, cwd, channel, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',)
+    this.stmt('INSERT INTO sessions (id, projectId, roleId, specialization, cwd, channel, title, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',)
       .run(
         params.id,
         params.projectId,
@@ -945,6 +947,7 @@ export class Store {
         params.specialization ?? null,
         params.cwd,
         params.channel ?? null,
+        params.title == null || params.title.trim() === '' ? null : params.title.trim(),
         timestamp,
         timestamp,
       );
@@ -2350,6 +2353,39 @@ export class Store {
         }
       | undefined;
     return row === undefined ? undefined : { ...row, hasHistory: row.hasHistory === 1 };
+  }
+
+  /**
+   * A fork is one row plus its history binding, written together: a session whose binding failed
+   * would look like an empty conversation and could never run the copied context.
+   */
+  createForkedChiefSession(params: {
+    readonly id: string;
+    readonly projectId: string;
+    readonly cwd: string;
+    readonly title: string;
+    readonly piFile: string;
+    readonly branchEntryId: string;
+    readonly configHash: string | null;
+    readonly rulesHash?: string | null;
+  }): void {
+    this.transaction(() => {
+      this.createSession({
+        id: params.id,
+        projectId: params.projectId,
+        roleId: 'chief',
+        cwd: params.cwd,
+        title: params.title,
+      });
+      this.recordSessionBinding({
+        sessionId: params.id,
+        piFile: params.piFile,
+        branchEntryId: params.branchEntryId,
+        hasHistory: true,
+        configHash: params.configHash ?? '',
+        ...(params.rulesHash != null ? { rulesHash: params.rulesHash } : {}),
+      });
+    });
   }
 
   getInput(inputId: string): InputRow | undefined {

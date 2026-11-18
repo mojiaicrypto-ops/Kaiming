@@ -331,6 +331,31 @@ export class PiRuntimeFactory {
       dispose: () => session.dispose(),
     };
   }
+
+  /**
+   * Copy the current branch of a session into a new JSONL file (fork): the source file is read, the
+   * new one records its parent in the header, and abandoned branches stay behind. The source is
+   * untouched, so both conversations stay live and independent.
+   */
+  branchSessionFile(params: {
+    readonly sourcePiFile: string;
+    readonly cwd: string;
+  }): { readonly piFile: string; readonly leafEntryId: string } {
+    if (!existsSync(params.sourcePiFile)) {
+      throw new HistoryUnavailableError(params.sourcePiFile);
+    }
+    const sessionDir = join(this.defaults.agentDir, 'sessions');
+    const manager = SessionManager.open(params.sourcePiFile, sessionDir, params.cwd);
+    const leaf = manager.getLeafId();
+    if (leaf === null || leaf === '') {
+      throw new Error('the source session has no leaf entry; there is no conversation to fork');
+    }
+    const piFile = manager.createBranchedSession(leaf);
+    if (piFile === undefined) {
+      throw new Error('the session manager did not create a forked session file');
+    }
+    return { piFile, leafEntryId: leaf };
+  }
 }
 
 export class HistoryUnavailableError extends Error {

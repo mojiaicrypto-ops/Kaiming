@@ -26,6 +26,8 @@ export interface SessionsListProps {
    * Returns false when the write was refused, so the caller can explain why.
    */
   readonly onRename: (sessionId: string, title: string, revision: number) => Promise<boolean>;
+  /** Copy this conversation into a new session; the caller refreshes and selects it. */
+  readonly onFork: (sessionId: string) => void;
   /** Sheet form (compact viewports): the same rows, opened over the transcript. */
   readonly className?: string;
 }
@@ -63,6 +65,7 @@ export function SessionsList({
   onCleanup,
   onArchive,
   onRename,
+  onFork,
   className,
 }: SessionsListProps) {
   const { t } = useI18n();
@@ -151,6 +154,19 @@ export function SessionsList({
               }}
             >
               ✎
+            </button>
+            <button
+              type="button"
+              className="sx"
+              aria-label={t('session.fork')}
+              title={`${t('session.fork')} — ${t('session.forkHint')}`}
+              data-testid="session-fork"
+              onClick={() => {
+                setArmed(null);
+                onFork(row.sessionId);
+              }}
+            >
+              ⎇
             </button>
             {row.sessionId !== current && (
               <button

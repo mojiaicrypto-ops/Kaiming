@@ -47,6 +47,8 @@ export interface ChatPageProps {
   readonly onArchiveSession: (sessionId: string, revision: number, archived: boolean) => Promise<boolean>;
   /** Names a conversation; an empty title restores the derived one. */
   readonly onRenameSession: (sessionId: string, title: string, revision: number) => Promise<boolean>;
+  /** Copies a conversation into a new session and selects it. */
+  readonly onForkSession: (sessionId: string) => void;
   /** Fills the composer with a request about the interrupted run; the chief decides what follows. */
   readonly onAskChief: (text: string) => void;
   /** No session is open: the banner offers the one action that can start a connection. */
@@ -66,7 +68,7 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, projectRealPath, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onArchiveSession, onRenameSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail, onOpenFile }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, projectRealPath, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onArchiveSession, onRenameSession, onForkSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail, onOpenFile }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
@@ -462,6 +464,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
             onCleanup={onCleanupSession}
             onArchive={onArchiveSession}
             onRename={onRenameSession}
+            onFork={onForkSession}
           />
         </>
       ) : (
@@ -476,6 +479,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
           onCleanup={onCleanupSession}
           onArchive={onArchiveSession}
           onRename={onRenameSession}
+          onFork={onForkSession}
         />
       )}
       <section className="conv">

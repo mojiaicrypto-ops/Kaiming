@@ -287,6 +287,23 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             projectId={workspace.projectId}
             projectRealPath={workspace.project?.realPath ?? ''}
             hasProject={workspace.projectId !== ''}
+            onForkSession={(sessionId) => {
+              void (async () => {
+                try {
+                  const forked = await rpc.call<{ sessionId: string }>(
+                    'session.fork',
+                    { projectId: workspace.projectId, sessionId },
+                    { requestId: newRequestId('fork') },
+                  );
+                  await workspace.refreshSessions();
+                  workspace.selectSession(forked.sessionId);
+                  setRailOpen(false);
+                  notify(t('session.forked'), 'success');
+                } catch (error) {
+                  notify(t('session.forkRefused', { reason: errorText(error, t) }), 'error');
+                }
+              })();
+            }}
             onSelectSession={(sessionId) => {
               workspace.selectSession(sessionId);
               setRailOpen(false);

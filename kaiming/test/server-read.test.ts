@@ -682,14 +682,16 @@ describe('read-only query surface', () => {
       nextCursor: string | null;
     }>(listed.body);
     const byId = new Map(body.sessions.map((entry) => [entry.sessionId, entry]));
-    // The title is the first user message's first non-empty line, cut to 60 code points.
+    // The title is the first user message's first non-empty line, capped at 60 UTF-16 units — the
+    // same unit session.rename and the fork enforce — so a rename of any row can never be refused.
     expect(byId.get('s-chief')?.title).toBe('先讨论，不开始开发');
     // The rail can act on its own rows: cleanup is a compare-and-set on this revision, which the
     // fixture bumped while seeding the Task.
     expect(typeof byId.get('s-chief')?.revision).toBe('number');
     expect(byId.get('s-chief')?.revision).toBeGreaterThanOrEqual(1);
-    expect([...(byId.get('s-long')?.title ?? '')]).toHaveLength(61);
-    expect(byId.get('s-long')?.title?.endsWith('…')).toBe(true);
+    const longTitle = byId.get('s-long')?.title ?? '';
+    expect(longTitle.length).toBeLessThanOrEqual(60);
+    expect(longTitle.endsWith('…')).toBe(true);
     // A session with no input has no title and no activity, and still appears (it is a session).
     expect(byId.get('s-empty')?.title).toBeNull();
     expect(byId.get('s-empty')?.activity).toBe('idle');

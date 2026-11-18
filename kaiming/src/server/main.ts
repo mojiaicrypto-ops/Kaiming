@@ -352,6 +352,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
     compactSession: (sessionId) => runner.compactManually(sessionId),
     controlTask: (control) => runner.controlTask(control),
+    forkSessionFile: (params) => factory.branchSessionFile(params),
     invalidate: (sessionId, entity, id) => {
       hub.publish(sessionId, { type: 'invalidate', entity, id });
     },

@@ -974,7 +974,9 @@ function activityOfCounts(processing: number, queued: number, stopping: number):
 
 /**
  * A session's title is the first non-empty line of its first user message: derived, never stored,
- * so there is no second place for a title to disagree with the conversation.
+ * so there is no second place for a title to disagree with the conversation. The cap is 60 UTF-16
+ * units — the same unit `session.rename`, the rail's input and `session.fork` enforce — and it never
+ * splits a surrogate pair.
  */
 function titleOf(payload: string | null): string | null {
   if (payload === null) return null;
@@ -985,8 +987,13 @@ function titleOf(payload: string | null): string | null {
     .map((entry) => entry.trim())
     .find((entry) => entry !== '');
   if (line === undefined) return null;
-  const points = [...line];
-  return points.length <= TITLE_LIMIT ? line : `${points.slice(0, TITLE_LIMIT).join('')}…`;
+  if (line.length <= TITLE_LIMIT) return line;
+  let out = '';
+  for (const point of line) {
+    if ((out + point).length > TITLE_LIMIT - 1) break;
+    out += point;
+  }
+  return `${out}…`;
 }
 
 

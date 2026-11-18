@@ -3,6 +3,8 @@
  * nothing else yet. Handlers only do what the contract says: they verify identity and state, hand the
  * real work to the worker, and report the stored facts.
  */
+import { randomUUID } from 'node:crypto';
+import { existsSync, rmSync } from 'node:fs';
 import { MAX_ATTACHMENTS_PER_INPUT, readDocument, readImage } from './attachments.ts';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import type { InputRow, Store } from '../store/store.ts';
@@ -18,6 +20,7 @@ import {
   type BacklogItem,
 } from '../runtime/backlog-store.ts';
 import { wakeForSettledStep } from './step-wake.ts';
+import { textOfPayload } from '../runtime/input-text.ts';
 
 export interface WriteMethodsOptions {
   /** Attachment storage for image blocks; absent means this server accepts text only. */
@@ -36,7 +39,11 @@ export interface WriteMethodsOptions {
   readonly resolveInteraction?: (interactionId: string, response: unknown) => boolean;
   /** Run Pi's own compaction for one idle session (manual entry); validation lives in the runner. */
   readonly compactSession?: (sessionId: string) => Promise<CompactionOutcome>;
-  /** The same Task control path the chief's own tool uses (pause/resume/cancel + stop flow). */
+  /** Copy the source conversation's current branch into a new Pi file (fork). */
+  readonly forkSessionFile?: (params: {
+    readonly sourcePiFile: string;
+    readonly cwd: string;
+  }) => { readonly piFile: string; readonly leafEntryId: string };
   readonly controlTask: (params: {
     taskId: string;
     expectedRevision: number;
@@ -342,6 +349,91 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
     },
   });
 
+  router.register('session.fork', {
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      if (sessionId === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      if (session.roleId !== 'chief') {
+        throw new RpcError('INVALID_ARGUMENT', 'only a chief session can be forked', {
+          sessionId,
+          roleId: session.roleId,
+        });
+      }
+      // A fork copies one point in the conversation: an input in flight has no settled branch yet.
+      const busy = store
+        .listInputs(sessionId)
+        .filter((input) => input.status === 'queued' || input.status === 'processing' || input.status === 'interrupted')
+        .map((input) => input.inputId);
+      if (busy.length > 0) {
+        throw new RpcError('WORKSPACE_BUSY', 'the session still has unfinished work; let it settle before forking', {
+          sessionId,
+          inputs: busy,
+        });
+      }
+      const binding = store.getSessionBinding(sessionId);
+      if (binding === undefined || !binding.hasHistory) {
+        throw new RpcError('INVALID_ARGUMENT', 'cannot fork an empty session', { sessionId });
+      }
+      if (!existsSync(binding.piFile)) {
+        throw new RpcError('HISTORY_UNAVAILABLE', 'the bound history file is missing; there is nothing to fork', {
+          sessionId,
+          piFile: binding.piFile,
+        });
+      }
+      const forkFile = options.forkSessionFile;
+      if (forkFile === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'this server cannot fork sessions');
+      }
+      // A caller may name the copy (same whitespace/cap rule as `session.rename`); otherwise the
+      // source's displayed name plus `(fork)`, keeping the marker inside the 60-code-point cap.
+      const requested = (readString(params, 'title') ?? '').replace(/\s+/g, ' ').trim();
+      const title =
+        requested === '' ? forkTitle(forkBaseTitle(store, session)) : truncateTitle(requested, 60);
+      const newSessionId = `s-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      let forked: { readonly piFile: string; readonly leafEntryId: string };
+      try {
+        // The file's current leaf is the fork point: a recorded binding entry can lag a compaction.
+        forked = forkFile({ sourcePiFile: binding.piFile, cwd: session.cwd });
+      } catch (error) {
+        throw new RpcError(
+          'INVALID_ARGUMENT',
+          `the conversation could not be forked: ${error instanceof Error ? error.message : String(error)}`,
+          { sessionId },
+        );
+      }
+      try {
+        store.createForkedChiefSession({
+          id: newSessionId,
+          projectId: project.id,
+          cwd: session.cwd,
+          title,
+          piFile: forked.piFile,
+          branchEntryId: forked.leafEntryId,
+          configHash: binding.configHash,
+          rulesHash: binding.rulesHash,
+        });
+      } catch (error) {
+        // The rows are the record: a fork that could not be recorded must not leave a stray history.
+        rmSync(forked.piFile, { force: true });
+        throw error instanceof RpcError
+          ? error
+          : new RpcError('STORAGE_UNAVAILABLE', `the forked session could not be saved: ${String(error)}`, {
+              sessionId: newSessionId,
+            });
+      }
+      options.invalidate?.(newSessionId, 'session', newSessionId);
+      return { sessionId: newSessionId, title, revision: 1 };
+    },
+  });
+
   router.register('session.recovery.resolve', {
     write: true,
     run: (params, context): unknown => {
@@ -548,6 +640,43 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       return backlogWriteResult(item);
     },
   });
+}
+
+const FORK_TITLE_LIMIT = 60;
+const FORK_SUFFIX = ' (fork)';
+
+/**
+ * One-line title under a UTF-16 length cap — the same unit `session.rename` and the rail's input
+ * enforce, so a fork's name can always be edited later. Never splits a surrogate pair.
+ */
+function truncateTitle(title: string, limit = FORK_TITLE_LIMIT): string {
+  if (title.length <= limit) return title;
+  let out = '';
+  for (const point of title) {
+    if ((out + point).length > limit - 1) break;
+    out += point;
+  }
+  return `${out}…`;
+}
+
+/** `${base} (fork)` with the base shortened so the marker survives the cap. */
+function forkTitle(base: string): string {
+  return `${truncateTitle(base, FORK_TITLE_LIMIT - FORK_SUFFIX.length)}${FORK_SUFFIX}`;
+}
+
+/**
+ * The source conversation's displayed name: the stored name, else the first line of its first user
+ * message — the same rule the rail shows, without its display truncation (the fork's own cap trims).
+ */
+function forkBaseTitle(store: Store, session: { readonly id: string; readonly title: string | null }): string {
+  if (session.title !== null && session.title.trim() !== '') return session.title.trim();
+  const first = store.listInputs(session.id).find((input) => input.kind === 'user');
+  const text = first === undefined ? '' : (textOfPayload(first.payload) ?? '');
+  const line = text
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find((entry) => entry !== '');
+  return line === undefined || line === '' ? 'Chat' : line;
 }
 
 function stopResult(
