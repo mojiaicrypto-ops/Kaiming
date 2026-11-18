@@ -133,9 +133,9 @@ export interface DispatchContext extends TaskToolContext {
   readonly host: DelegationHost;
 }
 
-const DEFAULT_WAIT_MS = 120_000;
+const DEFAULT_WAIT_MS = 600_000;
 const MIN_WAIT_MS = 1_000;
-const MAX_WAIT_MS = 300_000;
+const MAX_WAIT_MS = 1_800_000;
 
 /** Roles that write project files in a write Task and therefore declare a writeScope. */
 const WRITING_ROLES = new Set(['designer', 'developer', 'settler']);

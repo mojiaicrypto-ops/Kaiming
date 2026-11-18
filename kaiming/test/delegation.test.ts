@@ -171,7 +171,7 @@ describe('task dispatch', () => {
     // The member's first input really exists and is queued, and it was dispatched once.
     expect(f.store.getInput(members[0]?.currentInputId ?? '')?.status).toBe('queued');
     expect(f.dispatchCalls).toEqual([members[0]?.sessionId]);
-    expect(f.settleCalls).toEqual([{ taskId: task?.id, timeoutMs: 120_000 }]);
+    expect(f.settleCalls).toEqual([{ taskId: task?.id, timeoutMs: 600_000 }]);
     expect(result.details['outcome']).toBe('completed');
   });
 
@@ -373,6 +373,11 @@ describe('task dispatch', () => {
     expect(f.store.listTaskSessions(snapshot.taskId)).toHaveLength(0);
     expect(f.dispatchCalls).toEqual([]);
     expect(f.settleCalls).toEqual([{ taskId: snapshot.taskId, timeoutMs: 1_000 }]);
+
+    // The other end of the window: a request beyond the ceiling is clamped, not honoured.
+    const capped = await f.taskTool.execute('call-2', { op: 'dispatch', waitTimeoutMs: 10_000_000 });
+    expect(capped.isError).toBe(false);
+    expect(f.settleCalls[1]).toEqual({ taskId: snapshot.taskId, timeoutMs: 1_800_000 });
   });
 
   it('derives the label and the report kind from the role when they are omitted', async () => {

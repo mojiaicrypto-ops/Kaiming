@@ -17,6 +17,7 @@ import {
   updateItem,
   type BacklogItem,
 } from '../runtime/backlog-store.ts';
+import { wakeForSettledStep } from './step-wake.ts';
 
 export interface WriteMethodsOptions {
   /** Attachment storage for image blocks; absent means this server accepts text only. */
@@ -201,6 +202,9 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
           requestKey: context.requestId === '' ? `stop:${inputId}` : `stop:${context.requestId}`,
           reason: 'user',
         });
+        // Stopping the last queued member settles the step without any run outcome to report.
+        // A queued stop leaves the worker nothing to claim, so the notice needs its own wake-up.
+        if (wakeSettledStep(store, input.taskId, options)) options.notify();
         return stopResult(store, sessionId, inputId, result.status, result.stopRequested, options.invalidate);
       }
       // Already settled: stopping is idempotent and reports the current state unchanged.
@@ -245,6 +249,8 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       // The stop flow lives in the runner: the final status is written only after the work stopped.
       const controlled = await options.controlTask({ taskId, expectedRevision, command });
       options.invalidate?.(task.chiefSessionId, 'task', taskId);
+      // Resuming can find the step already settled; no run outcome will report that.
+      if (command === 'resume') wakeSettledStep(store, taskId, options);
       options.notify();
       return {
         taskId,
@@ -375,6 +381,8 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       });
       // The session may now consume its remaining work.
       options.invalidate?.(sessionId, 'input', inputId);
+      // Resolving the last interrupted member settles the step; no run outcome will report it.
+      wakeSettledStep(store, store.getInput(inputId)?.taskId ?? null, options);
       options.notify();
       return {
         inputId: resolved.inputId,
@@ -563,6 +571,27 @@ function stopResult(
     // Until the run really settles the session is stopping; the client must not assume it stopped.
     activity: running ? 'stopping' : 'idle',
   };
+}
+
+/**
+ * After a transition that can leave the Task's current step settled with nobody waiting, give the
+ * idle chief its one turn. The step-wake rules (dedupe, chief busy, Task not running) decide; this
+ * only supplies the three transitions that produce no run outcome. Returns whether a notice was
+ * queued, so the caller can wake the worker to claim it at once.
+ */
+function wakeSettledStep(store: Store, taskId: string | null, options: WriteMethodsOptions): boolean {
+  if (taskId === null) return false;
+  try {
+    const woke = wakeForSettledStep(store, taskId);
+    if (!woke.woken) return false;
+    const chief = store.getTask(taskId)?.chiefSessionId;
+    if (chief !== undefined) options.invalidate?.(chief, 'session', chief);
+    return true;
+  } catch {
+    // The transition already happened. A lost notice is recovered by the startup scan, so a wake
+    // failure must not turn a completed stop or resolve into an RPC error.
+    return false;
+  }
 }
 
 /** Map the backlog store's failures onto the public error contract, keeping the actionable facts. */

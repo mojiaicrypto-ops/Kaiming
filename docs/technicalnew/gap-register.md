@@ -78,6 +78,8 @@
 
 #### P0-3：委派等待窗口调优与控制唤醒闭环（闭合 C8）
 
+**状态**：已实施（2026-11-18），C8 关闭。三条 RPC 转换共用 `wakeSettledStep`；主管回合内的 control/recover 不再重复接线（结果必为 `chief-busy`）。证据见[验证记录](validation.md#2026-11-18--p0-3-委派等待窗口与唤醒闭环关闭-c8)。
+
 - **问题与根因**：
   1. `src/tools/delegation-tools.ts`（第 58～60 行）中 `DEFAULT_WAIT_MS = 120_000`（2 分钟）、`MAX_WAIT_MS = 300_000`（5 分钟）。由于 C10 已在 `runner.ts` 中将 `settleStep` 期间标记为 `hostWaits`（不计入主管看门狗），2 分钟超时只会让主管在 10 分钟的开发/测试任务中白跑 5 次毫无意义的空名单 `task(op=dispatch)` 轮询回合。
   2. [gap-register.md](gap-register.md) 登记的 **C8**：`wakeForSettledStep` 目前只在 `main.ts` 的 `handleOutcome` 与启动扫描时调用；而① `task.control(resume)`（或主管调用 `controlOp` 恢复暂停的 Task）、② `session.input.stop` 停止了一条 `queued` 状态的成员输入、③ `session.recovery.resolve`（或 `task(op=recover)`）关闭了一条 `interrupted` 成员输入——这三条路径都不产生 run outcome，若此时当前步骤已全部停稳，主管不会被唤醒。

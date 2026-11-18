@@ -35,6 +35,8 @@ interface Harness {
   readonly projectId: string;
   readonly runner: InputRunner;
   readonly outcomes: Array<{ sessionId: string; kind: RunOutcome['kind'] }>;
+  /** Business invalidations published to the browser, in call order. */
+  readonly invalidations: Array<{ sessionId: string; entity: string; id: string }>;
   /** Resolves when the worker reports the given outcome (a real event, not a guessed delay). */
   awaitOutcome(sessionId: string, kind: RunOutcome['kind']): Promise<void>;
   cookie: string;
@@ -54,6 +56,7 @@ async function harness(
   const projectId = 'p-1';
   store.createProject({ id: projectId, realPath: realpathSync(projectRoot) });
   store.createSession({ id: 's-chief', projectId, roleId: 'chief', cwd: realpathSync(projectRoot) });
+  const invalidations: Array<{ sessionId: string; entity: string; id: string }> = [];
   store.createSession({ id: 's-dev', projectId, roleId: 'developer', cwd: realpathSync(projectRoot) });
 
   const model = replies.length > 0 ? await startStubModelServer(replies) : undefined;
@@ -107,6 +110,7 @@ async function harness(
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
     compactSession: (sessionId) => runner.compactManually(sessionId),
     controlTask: (control) => runner.controlTask(control),
+    invalidate: (sessionId, entity, id) => invalidations.push({ sessionId, entity, id }),
   });
   const workbench = createWorkbenchServer({ store, auth, router });
   const { origin } = await workbench.listen(0);
@@ -128,6 +132,7 @@ async function harness(
     projectId,
     runner,
     outcomes,
+    invalidations,
     awaitOutcome: (sessionId, kind) =>
       new Promise((resolve) => {
         if (outcomes.some((entry) => entry.sessionId === sessionId && entry.kind === kind)) {
@@ -449,6 +454,179 @@ describe('write surface', () => {
     });
     expect(wrongProject.status).toBe(404);
   }, 30_000);
+
+/**
+ * A running write Task in `develop` whose current step is one queued member per entry. The three
+ * transitions below settle such a step without a run outcome, which is exactly when the chief needs
+ * its one wake-up turn.
+ */
+function seedWakeStep(
+  store: Store,
+  projectId: string,
+  taskId: string,
+  members: ReadonlyArray<{ sessionId: string; inputId: string }>,
+): void {
+  store.createTask({
+    id: taskId,
+    projectId,
+    chiefSessionId: 's-chief',
+    ownerEpoch: 1,
+    type: 'write',
+    requiresTest: false,
+    goal: 'ship it',
+    scope: 'x',
+    acceptanceRefs: [],
+    basisRefs: [],
+    planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+    authorizationRefs: [],
+    sourceInputId: 'none',
+  });
+  store.updateTask({ taskId, phase: 'develop' });
+  store.createTaskSessions({
+    taskId,
+    members: members.map((member) => ({
+      sessionId: member.sessionId,
+      taskId,
+      roleId: 'developer',
+      phase: 'develop' as const,
+      label: 'dev',
+      instructions: 'implement it',
+      refs: [],
+      dependencies: [],
+      expectedKind: 'implementation',
+      writeScope: ['src/**'],
+      inputId: member.inputId,
+      inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+    })),
+  });
+}
+
+/** Run a seeded member input to a terminal state, the way the worker would. */
+function settleMemberInput(store: Store, sessionId: string, status: 'completed' | 'interrupted'): void {
+  const claimed = store.claimNextInput(sessionId);
+  if (claimed.kind !== 'claimed') throw new Error(`the member input was not claimable: ${claimed.kind}`);
+  store.finishInput({
+    inputId: claimed.input.inputId,
+    expectedRevision: claimed.input.revision,
+    status,
+    ...(status === 'interrupted'
+      ? { errorCode: 'RUN_TIMEOUT', errorMessage: 'run exceeded 5400s; the run was aborted' }
+      : {}),
+  });
+}
+
+function stepNotices(store: Store, chiefSessionId: string) {
+  return store.listInputs(chiefSessionId).filter((input) => input.inputId.startsWith('notice-step-'));
+}
+
+describe('step wake on non-run transitions (C8)', () => {
+  it('wakes the chief when a resume finds the step already settled', async () => {
+    const h = await harness();
+    seedWakeStep(h.store, h.projectId, 't-wake-resume', [{ sessionId: 's-wake-1', inputId: 'i-wake-1' }]);
+    settleMemberInput(h.store, 's-wake-1', 'completed');
+    const paused = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: 't-wake-resume',
+      expectedRevision: h.store.getTask('t-wake-resume')?.revision ?? 1,
+      command: 'pause',
+    });
+    expect(paused.status).toBe(200);
+
+    const resumed = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: 't-wake-resume',
+      expectedRevision: h.store.getTask('t-wake-resume')?.revision ?? 1,
+      command: 'resume',
+    });
+
+    expect(resumed.status).toBe(200);
+    const notices = stepNotices(h.store, 's-chief');
+    expect(notices).toHaveLength(1);
+    // The notice names the Task that settled, and the browser is told the chief session changed.
+    expect(notices[0]?.taskId).toBe('t-wake-resume');
+    expect(h.invalidations).toContainEqual({ sessionId: 's-chief', entity: 'session', id: 's-chief' });
+  }, 30_000);
+
+  it('wakes the chief when stopping the last queued member settles the step', async () => {
+    const h = await harness();
+    seedWakeStep(h.store, h.projectId, 't-wake-stop', [{ sessionId: 's-wake-2', inputId: 'i-wake-2' }]);
+
+    const stopped = await h.call('session.input.stop', {
+      projectId: h.projectId,
+      sessionId: 's-wake-2',
+      inputId: 'i-wake-2',
+    });
+
+    expect(stopped.status).toBe(200);
+    const notices = stepNotices(h.store, 's-chief');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.taskId).toBe('t-wake-stop');
+    expect(h.invalidations).toContainEqual({ sessionId: 's-chief', entity: 'session', id: 's-chief' });
+  }, 30_000);
+
+  it('wakes the chief when resolving the last interrupted member settles the step', async () => {
+    const h = await harness();
+    seedWakeStep(h.store, h.projectId, 't-wake-resolve', [{ sessionId: 's-wake-3', inputId: 'i-wake-3' }]);
+    settleMemberInput(h.store, 's-wake-3', 'interrupted');
+
+    const resolved = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-wake-3',
+      inputId: 'i-wake-3',
+      expectedRevision: h.store.getInput('i-wake-3')?.revision ?? 1,
+      resolution: 'failed',
+      evidenceRefs: ['log:run-timeout'],
+    });
+
+    expect(resolved.status).toBe(200);
+    const notices = stepNotices(h.store, 's-chief');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.taskId).toBe('t-wake-resolve');
+    expect(h.invalidations).toContainEqual({ sessionId: 's-chief', entity: 'session', id: 's-chief' });
+  }, 30_000);
+
+  it('does not wake the chief while another member of the step is still unfinished', async () => {
+    const h = await harness();
+    seedWakeStep(h.store, h.projectId, 't-wake-busy', [
+      { sessionId: 's-wake-4', inputId: 'i-wake-4' },
+      { sessionId: 's-wake-5', inputId: 'i-wake-5' },
+    ]);
+
+    const stopped = await h.call('session.input.stop', {
+      projectId: h.projectId,
+      sessionId: 's-wake-4',
+      inputId: 'i-wake-4',
+    });
+
+    expect(stopped.status).toBe(200);
+    // The second member is still queued, so the step is not settled and no notice may exist.
+    expect(h.store.getInput('i-wake-5')?.status).toBe('queued');
+    expect(stepNotices(h.store, 's-chief')).toHaveLength(0);
+  }, 30_000);
+
+  it('does not wake the chief while the Task is paused', async () => {
+    const h = await harness();
+    seedWakeStep(h.store, h.projectId, 't-wake-paused', [{ sessionId: 's-wake-6', inputId: 'i-wake-6' }]);
+    // Pause keeps queued work; stopping it now leaves a settled step on a Task that is not running.
+    const paused = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: 't-wake-paused',
+      expectedRevision: h.store.getTask('t-wake-paused')?.revision ?? 1,
+      command: 'pause',
+    });
+    expect(paused.status).toBe(200);
+
+    const stopped = await h.call('session.input.stop', {
+      projectId: h.projectId,
+      sessionId: 's-wake-6',
+      inputId: 'i-wake-6',
+    });
+
+    expect(stopped.status).toBe(200);
+    expect(h.store.getTask('t-wake-paused')?.status).toBe('paused');
+    expect(stepNotices(h.store, 's-chief')).toHaveLength(0);
+  }, 30_000);
+});
 
   it('cleans up only a session nothing references and lists the real reasons otherwise', async () => {
     const h = await harness();
