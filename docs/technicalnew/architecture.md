@@ -150,9 +150,7 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 | 外部接入 | 编码 Agent 通过 MCP 调用同一 Server：`/mcp`（Streamable HTTP，与前端同进程）与 `npm run mcp`（stdio 子进程，附着或自启 workbench）；工具面与状态推导见 [MCP 服务](mcp-service.md) | `src/mcp/` |
 | 构建产物 | `kaiming/web-static/` 不入库，构建后可被测试与服务端使用 | `kaiming/.gitignore` |
 | 样式 | 令牌与组件层照 `docs/design/tui/tui.css` 重写；代码/标识等宽，中文正文无衬线 | `kaiming/webapp/src/theme/` |
-| 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `kaiming/webapp/src/state/useWorkspace.ts` |
-
-服务端当前没有项目/会话列表方法，界面只能持有本地最近选择；多项目、多会话导航的真实列表需要只读查询方法，属待补齐缺口。
+| 会话标题与列表 | `project.list`、`session.list` 一次返回项目与会话列表；`sessions.title` 保存用户自定义名，为空时取首条用户消息派生 | `src/server/read-methods.ts`、`src/store/store.ts` |
 
 ## A8 协调扩展点（本阶段只定义，不实现）
 

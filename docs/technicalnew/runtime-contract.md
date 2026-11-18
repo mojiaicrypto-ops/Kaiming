@@ -1,6 +1,6 @@
 # 项目与 Session 运行契约
 
-本页定义公开接入和共用 Pi 执行流程。存储原子性见 [S3](storage-and-recovery.md#s3-事务认领与等待)，角色/工具见 [G1～G4](agents-and-tools.md)。接口版本 v1；未实施。
+本页定义公开接入和共用 Pi 执行流程。存储原子性见 [S3](storage-and-recovery.md#s3-事务认领与等待)，角色/工具见 [G1～G4](agents-and-tools.md)。接口版本 v1，实施与验证证据见 [验证记录](validation.md)。
 
 ## R1 公开入口
 
@@ -36,7 +36,8 @@
 | project.get | projectId | 概要与当前绑定/入口问题；目录缺失明确报告；不含任务列表（任务一律走 `task.list`） |
 | project.list | limit?、cursor? | 已登记项目列表：realPath、目录是否存在、会话/任务数、最后活动、更新时间；cursor 为 `updatedAt\|projectId`；不读项目文件 |
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |
-| session.create | projectId | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取；标题不存储，由首条用户输入派生 |
+| session.create | projectId | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取；初始标题为空，读取时若未自定义改名则由首条用户输入派生 |
+| session.rename | projectId、sessionId、expectedRevision、title | 修改主管会话显示名（上限 60 字符，空白归一化后为空则清除自定义名、恢复首条用户输入派生；CAS 校验 revision，子会话拒绝） |
 | session.open | projectId、channel | 外部通道的**固定会话**：有就返回、没有才建（`created` 区分）；channel 为 1–32 位小写字母/数字/连字符；同一 (projectId, channel) 至多一条，靠部分唯一索引保证并发 |
 | session.get | projectId、sessionId | role、currentTaskId、activity、stopping、当前输入、等待原因、排队数、lastActivityAt、config{providerId,modelId,source}；activity=idle/queued/processing/stopping（stopping=已请求停止但尚未停稳）；config 取当前输入认领时记录的配置，只回这三个字段，不含服务端目录 |
 | session.list | projectId、limit?、cursor? | 会话列一次取齐：sessionId、roleId、revision（清理的 CAS 依据）、title（派生，60 码点截断）、channel（外部通道的固定会话，普通会话为 null）、activity、lastActivityAt、currentTaskId、queuedInputs；cursor 为 `lastActivityAt\|sessionId`；不调用 `stream.prepare`、不读历史文件 |
