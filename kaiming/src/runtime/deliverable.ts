@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, normalize, relative, sep } from 'node:path';
-import { ignoredProjectPaths } from './git-delivery.ts';
+import { changedProjectPaths, ignoredProjectPaths } from './git-delivery.ts';
 
 export interface DeliveryState {
   /** sha256 over the observed paths and their contents. */
@@ -117,6 +117,129 @@ export function snapshotDesignDelivery(cwd: string, excludePaths: readonly strin
 export function digestOfPaths(cwd: string, paths: readonly string[]): string {
   const lines = [...paths].sort().map((path) => `${path}\0${hashFile(join(cwd, path))}`);
   return sha256(lines.join('\n'));
+}
+
+/**
+ * The identity of a file that was already dirty when a write Task was created: its content hash (or
+ * `missing`/`unreadable`). A file whose bytes still match is somebody else's uncommitted work and not
+ * part of this Task's delivery; once they change, it joins the Task's scope and delivery.
+ */
+export type DirtyBaseline = Readonly<Record<string, string>>;
+
+/**
+ * Whether the delivery walk would observe this path: a regular file, not a symlink, outside the host
+ * bookkeeping directories. Git can report paths the snapshot never walks; demanding a review for
+ * those would be unsatisfiable.
+ */
+export function isWalkedProjectFile(cwd: string, path: string): boolean {
+  if (path.split('/').some((segment) => SKIP_DIRS.has(segment))) return false;
+  return isObservedFile(cwd, path);
+}
+
+/**
+ * Snapshot every git-dirty project path's content. No repository means no baseline (no filtering).
+ * `design` also captures `.dev/product/**` and `.dev/technical/**`: those are a design Task's delivery
+ * even though ordinary reviews never see `.dev`.
+ */
+export function captureDirtyBaseline(cwd: string, options: { design?: boolean } = {}): DirtyBaseline {
+  const baseline: Record<string, string> = {};
+  for (const path of changedProjectPaths(cwd)) {
+    // A deleted path is still an identity (`missing`); anything present must be a readable file the
+    // walk could visit, so a FIFO or a symlink never blocks Task creation or the recheck.
+    const absolute = join(cwd, path);
+    if (!existsSync(absolute)) {
+      baseline[path] = 'missing';
+      continue;
+    }
+    if (isWalkedProjectFile(cwd, path)) {
+      baseline[path] = hashFile(absolute);
+      continue;
+    }
+    const designArtifact =
+      options.design === true && (path.startsWith('.dev/product/') || path.startsWith('.dev/technical/'));
+    if (designArtifact && isObservedFile(cwd, path)) baseline[path] = hashFile(absolute);
+  }
+  return baseline;
+}
+
+/** True when the path was dirty at Task creation and its bytes have not changed since. */
+export function isUnchangedBaselineDirty(
+  cwd: string,
+  path: string,
+  baseline: DirtyBaseline | null | undefined,
+): boolean {
+  return baseline != null && Object.hasOwn(baseline, path) && hashFile(join(cwd, path)) === baseline[path];
+}
+
+/**
+ * The observed state minus the files this Task inherited: one rule for the review snapshot and every
+ * later recheck, so the two digests are computed over the same paths.
+ */
+export function withoutInherited(
+  cwd: string,
+  state: DeliveryState,
+  baseline: DirtyBaseline | null | undefined,
+): DeliveryState {
+  const paths = state.paths.filter((path) => !isUnchangedBaselineDirty(cwd, path, baseline));
+  return paths.length === state.paths.length ? state : { digest: digestOfPaths(cwd, paths), paths };
+}
+
+/**
+ * A path the review binding can actually cover: code files bind the review, docs/root Markdown are
+ * settlement output once a code path exists, and `.dev/**` is host bookkeeping. A design Task binds
+ * only its design artifacts.
+ */
+export function isCodeDeliveryPath(path: string): boolean {
+  return (
+    !path.startsWith('.dev/') &&
+    path !== '.gitignore' &&
+    !path.endsWith('/.gitignore') &&
+    !path.startsWith('docs/') &&
+    (path.includes('/') || !path.endsWith('.md'))
+  );
+}
+
+/** What a review for this Task can bind; `excluded` holds project-relative knowledge entries. */
+export interface DeliveryBinding {
+  readonly design: boolean;
+  readonly codeBound: boolean;
+  /** Knowledge entries are saved by settlement, so a change there never demands a review. */
+  readonly excluded?: ReadonlySet<string>;
+}
+
+/** Whether a change at `path` could be covered by the review this Task kind produces. */
+export function isReviewableDeliveryPath(path: string, binding: DeliveryBinding): boolean {
+  if (binding.excluded?.has(path) === true) return false;
+  if (binding.design) {
+    return path.startsWith('.dev/product/') || path.startsWith('.dev/technical/');
+  }
+  if (binding.codeBound) return isCodeDeliveryPath(path);
+  return !path.startsWith('.dev/');
+}
+
+/**
+ * Inherited files that left the baseline after the review and could have been covered by it: they are
+ * the Task's delivery now, but the review recorded a path list without them, so it must run again.
+ * `covered` is the path list that review recorded; the binding excludes changes a review can never
+ * cover (settlement output, host bookkeeping).
+ */
+export function changedInheritedPaths(
+  cwd: string,
+  baseline: DirtyBaseline | null | undefined,
+  covered: readonly string[],
+  binding: DeliveryBinding,
+): string[] {
+  if (baseline == null) return [];
+  const reviewed = new Set(covered);
+  return Object.keys(baseline)
+    .filter((path) => {
+      if (reviewed.has(path) || !isReviewableDeliveryPath(path, binding)) return false;
+      // A design artifact lives under `.dev`, which the ordinary walk skips; the design snapshot
+      // reads it directly, so both observations are regular files.
+      const observed = binding.design ? isObservedFile(cwd, path) : isWalkedProjectFile(cwd, path);
+      return observed && hashFile(join(cwd, path)) !== baseline[path];
+    })
+    .sort();
 }
 
 /** Whether a path inside the project is a file the walk would observe (symlinks are not). */

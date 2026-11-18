@@ -909,6 +909,59 @@ describe('startup scan and abandoned questions', () => {
     expect(restored.archivedAt).toBeNull();
   });
 
+  it('migrates a v19 database by adding the dirty baseline and round-trips it', () => {
+    const { store, path } = openStore();
+    seed(store);
+    // A real v19 row: a Task created before the column existed (it becomes NULL after migration).
+    store.createTask({
+      id: 't-old',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'old work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/old.md', sha256: 'o' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    // Cancelled, not deleted: the row must survive the migration but not hold the chief's slot.
+    store.controlTask({ taskId: 't-old', command: 'cancel' });
+    closeStore(store);
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE tasks DROP COLUMN dirtyBaseline');
+    raw.exec('PRAGMA user_version = 19');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    // The pre-migration row survives with no baseline, i.e. the old unfiltered behaviour.
+    expect(migrated.getTask('t-old')).toMatchObject({ goal: 'old work', dirtyBaseline: null });
+    const baseline = { 'src/inherited.ts': 'sha-inherited', 'src/gone.ts': 'missing' };
+    const created = migrated.createTask({
+      id: 't-baseline',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/p.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+      dirtyBaseline: baseline,
+    });
+    expect(created.dirtyBaseline).toEqual(baseline);
+    expect(migrated.getTask('t-baseline')?.dirtyBaseline).toEqual(baseline);
+  });
+
   it('freezes each workKind phase chain and counts backward moves as rework', () => {
     const { store } = openStore();
     seed(store);

@@ -562,4 +562,199 @@ describe('task end refuses an uncommitted delivery', () => {
     expect(afterGaps).not.toContain('not committed');
     expect(afterGaps).toContain('completion result');
   });
+
+  it('closes a Task that inherited dirty files without committing them', async () => {
+    const w = world();
+    // The user's own uncommitted work exists before the Task is created.
+    write(w.repo, 'src/unrelated.ts', 'export const u = 1;\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'implement',
+      goal: 'reset password',
+      scope: 'account module',
+      planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+    // The baseline really recorded the inherited file, and nothing else.
+    expect(Object.keys(w.store.getTask(taskId)?.dirtyBaseline ?? {})).toEqual(['src/unrelated.ts']);
+
+    write(w.repo, 'src/a.ts', 'export const a = 1;\n');
+    // Scope drift does not blame the inherited file.
+    const got = await w.tool.execute('call-get', { op: 'get', taskId });
+    const check = got.details['scopeCheck'] as { outOfScope: readonly string[] };
+    expect(check.outOfScope).toEqual([]);
+
+    // The review row lists the inherited file as well (as an older or unfiltered review would): the
+    // completion gate itself must drop it, not the caller.
+    passReview(w.store, taskId, w.repo, ['src/a.ts', 'src/unrelated.ts'], 'r-review');
+    git(w.repo, ['add', 'src/a.ts']);
+    git(w.repo, ['commit', '--quiet', '-m', 'this task only']);
+
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+    // The inherited file is still uncommitted, yet it is not this Task's delivery.
+    expect(gaps).not.toContain('not committed');
+    expect(gaps).not.toContain('src/unrelated.ts');
+  });
+
+  it('asks for a fresh review when an inherited file changed after the review', async () => {
+    const w = world();
+    write(w.repo, 'src/unrelated.ts', 'export const u = 1;\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'implement',
+      goal: 'reset password',
+      scope: 'account module',
+      planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+    write(w.repo, 'src/a.ts', 'export const a = 1;\n');
+    // The review happens while the inherited file still matches its baseline, so it is not covered.
+    passReview(w.store, taskId, w.repo, ['src/a.ts'], 'r-review');
+    git(w.repo, ['add', 'src/a.ts']);
+    git(w.repo, ['commit', '--quiet', '-m', 'this task only']);
+
+    // Negative control for the frozen path list: changing the inherited file afterwards is this
+    // Task's delivery now, and the review never saw it.
+    write(w.repo, 'src/unrelated.ts', 'export const u = 2;\n');
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+    expect(gaps).toContain('changed after the last passed review');
+    expect(gaps).toContain('src/unrelated.ts');
+  });
+
+  it('does not demand a review for inherited settlement output a review can never bind', async () => {
+    const w = world();
+    // The backlog entry and AGENTS.md are dirty when the Task is created (the chief wrote the item,
+    // the user has a local rule edit).
+    write(w.repo, '.dev/backlog.md', '# 待办\n\n### B-1\n- 状态: open\n');
+    write(w.repo, 'AGENTS.md', '# rules v1\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'implement',
+      goal: 'reset password',
+      scope: 'account module',
+      planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+    // Host bookkeeping never enters the baseline; the rule files written by the user do.
+    expect(Object.keys(w.store.getTask(taskId)?.dirtyBaseline ?? {})).toEqual(['AGENTS.md']);
+    write(w.repo, 'src/a.ts', 'export const a = 1;\n');
+    passReview(w.store, taskId, w.repo, ['src/a.ts'], 'r-review');
+    git(w.repo, ['add', 'src/a.ts']);
+    git(w.repo, ['commit', '--quiet', '-m', 'this task only']);
+
+    // Settlement closes the backlog item and rewrites the rule file after the review.
+    write(w.repo, '.dev/backlog.md', '# 待办\n\n## 已关闭\n\n### B-1\n- 状态: done\n');
+    write(w.repo, 'AGENTS.md', '# rules v2\n');
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+
+    // Neither is deliverable for a review, so neither may ask for one (it would never be satisfiable).
+    expect(gaps).not.toContain('changed after the last passed review');
+    expect(gaps).not.toContain('.dev/backlog.md');
+    expect(gaps).not.toContain('AGENTS.md');
+  });
+
+  it('asks for a review of an inherited document that changed when the delivery is docs-only', async () => {
+    const w = world();
+    // A docs-only delivery: no code path, so documents stay bound to the review.
+    write(w.repo, 'README.md', '# docs v1\n');
+    write(w.repo, 'notes.md', '# notes v1\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'document',
+      goal: 'update the docs',
+      scope: 'docs',
+      planMarkdown: '# plan\n\n## 范围\n`README.md`\n\n## 验收\n- docs updated\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+    passReview(w.store, taskId, w.repo, ['README.md'], 'r-review');
+
+    // The inherited document changes after the review: a re-review can cover it, so one is required.
+    write(w.repo, 'notes.md', '# notes v2\n');
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+
+    expect(gaps).toContain('changed after the last passed review');
+    expect(gaps).toContain('notes.md');
+  });
+
+  it('does not demand a review for an inherited knowledge entry the settlement rewrites', async () => {
+    const w = world();
+    // AGENTS.md is a knowledge entry of this project (settlement saves it) and is dirty before the
+    // Task, with a docs-only delivery so the document branch would otherwise admit it.
+    write(w.repo, 'AGENTS.md', '# rules v1\n');
+    w.store.setProjectInitialization({
+      projectId: 'p-1',
+      initializationRef: { files: [{ path: 'AGENTS.md' }] },
+    });
+    write(w.repo, 'README.md', '# docs v1\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'document',
+      goal: 'update the docs',
+      scope: 'docs',
+      planMarkdown: '# plan\n\n## 范围\n`README.md`\n\n## 验收\n- docs updated\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+    expect(Object.keys(w.store.getTask(taskId)?.dirtyBaseline ?? {}).sort()).toEqual(['AGENTS.md', 'README.md']);
+    passReview(w.store, taskId, w.repo, ['README.md'], 'r-review');
+
+    // Settlement rewrites the knowledge entry after the review.
+    write(w.repo, 'AGENTS.md', '# rules v2\n');
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+
+    // A knowledge entry never binds a review, so it cannot demand one.
+    expect(gaps).not.toContain('changed after the last passed review');
+    expect(gaps).not.toContain('AGENTS.md');
+  });
+
+  it('reports an inherited file once the Task changes it', async () => {
+    const w = world();
+    write(w.repo, 'src/unrelated.ts', 'export const u = 1;\n');
+    const created = await w.tool.execute('call-1', {
+      op: 'create',
+      type: 'write',
+      workKind: 'implement',
+      goal: 'reset password',
+      scope: 'account module',
+      planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: false,
+    });
+    const taskId = String(created.details['taskId']);
+
+    // Negative control: the Task also edits the inherited file, so it leaves the baseline.
+    write(w.repo, 'src/unrelated.ts', 'export const u = 2;\n');
+    const got = await w.tool.execute('call-get', { op: 'get', taskId });
+    const check = got.details['scopeCheck'] as { outOfScope: readonly string[] };
+    expect(check.outOfScope).toContain('src/unrelated.ts');
+
+    write(w.repo, 'src/a.ts', 'export const a = 1;\n');
+    passReview(w.store, taskId, w.repo, ['src/a.ts', 'src/unrelated.ts'], 'r-review');
+    git(w.repo, ['add', 'src/a.ts']);
+    git(w.repo, ['commit', '--quiet', '-m', 'this task only']);
+
+    const ended = await w.tool.execute('call-2', { op: 'end', taskId, completionResultId: 'r-settle' });
+    const gaps = (ended.details['gaps'] as string[]).join(' ');
+    expect(gaps).toContain('not committed');
+    expect(gaps).toContain('src/unrelated.ts');
+  });
 });

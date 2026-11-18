@@ -256,7 +256,10 @@ export function knowledgeEntryPaths(initializationRef: unknown): string[] {
   if (!Array.isArray(files)) {
     return [];
   }
+  // The stored spelling came from the caller; every consumer compares it with canonical project
+  // paths (git status keys), so normalise once here: project-relative POSIX, no leading `./`.
   return files
     .map((entry) => (typeof entry === 'object' && entry !== null ? (entry as { path?: unknown }).path : undefined))
-    .filter((path): path is string => typeof path === 'string' && path.trim() !== '');
+    .filter((path): path is string => typeof path === 'string' && path.trim() !== '')
+    .map((path) => path.replace(/\\/g, '/').replace(/^\.\//, ''));
 }

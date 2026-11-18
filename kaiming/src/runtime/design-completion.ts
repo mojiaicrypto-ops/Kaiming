@@ -5,7 +5,7 @@
  */
 import type { Store, TaskRow } from '../store/store.ts';
 import { readBacklog } from './backlog-store.ts';
-import { snapshotDesignDelivery } from './deliverable.ts';
+import { snapshotDesignDelivery, withoutInherited } from './deliverable.ts';
 import { join } from 'node:path';
 import { knowledgeEntryPaths } from './project-store.ts';
 
@@ -22,7 +22,7 @@ export function designCompletionGaps(store: Store, cwd: string, task: TaskRow): 
   } else {
     const project = store.getProject(task.projectId);
     const knowledge = knowledgeEntryPaths(project?.initializationRef).map((path) => join(cwd, path));
-    const current = snapshotDesignDelivery(cwd, knowledge);
+    const current = withoutInherited(cwd, snapshotDesignDelivery(cwd, knowledge), task.dirtyBaseline);
     if (current.digest !== reviewed.digest) {
       gaps.push(`the design artifacts changed after the last passed review (${review?.resultId ?? 'review'}); review them again`);
     }

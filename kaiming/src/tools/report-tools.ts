@@ -9,7 +9,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESULT_KINDS, StoreError, digestOf, type ArtifactRef, type ResultCheck, type ResultKind, type Store } from '../store/store.ts';
-import { digestOfPaths, snapshotDelivery, snapshotDesignDelivery, type DeliveryState } from '../runtime/deliverable.ts';
+import {
+  digestOfPaths,
+  isCodeDeliveryPath,
+  snapshotDelivery,
+  snapshotDesignDelivery,
+  withoutInherited,
+  type DeliveryState,
+} from '../runtime/deliverable.ts';
 import { digestOfText } from '../runtime/plan-store.ts';
 import { knowledgeEntryPaths } from '../runtime/project-store.ts';
 import { readReportBody, reportRefFor, reportTarget, writeReportBody } from '../runtime/report-store.ts';
@@ -247,8 +254,12 @@ function observeDelivery(context: ReportToolContext, taskId: string, kind: Resul
   const task = context.store.getTask(taskId);
   const project = context.store.getProject(context.projectId);
   const knowledge = knowledgeEntryPaths(project?.initializationRef).map((path) => join(context.cwd, path));
+  // A file that was already dirty when the Task was created and whose bytes did not change is the
+  // user's own work: not delivery, and never a reason to re-review (P1-1). The same filter runs at
+  // every later recheck, so both digests cover the same paths.
+  const baseline = task?.dirtyBaseline;
   if (task?.workKind === 'design' && task.flowVersion >= 1) {
-    return snapshotDesignDelivery(context.cwd, knowledge);
+    return withoutInherited(context.cwd, snapshotDesignDelivery(context.cwd, knowledge), baseline);
   }
   if (kind === 'test') {
     // The same file set the last passed review covered, so the digests are directly comparable.
@@ -258,10 +269,10 @@ function observeDelivery(context: ReportToolContext, taskId: string, kind: Resul
       .at(-1);
     if (review?.deliveryState != null) {
       const paths = review.deliveryState.paths;
-      return { digest: digestOfPaths(context.cwd, paths), paths };
+      return withoutInherited(context.cwd, { digest: digestOfPaths(context.cwd, paths), paths }, baseline);
     }
   }
-  return scopeReviewDelivery(context.cwd, snapshotDelivery(context.cwd, knowledge));
+  return scopeReviewDelivery(context.cwd, withoutInherited(context.cwd, snapshotDelivery(context.cwd, knowledge), baseline));
 }
 
 /**
@@ -271,13 +282,7 @@ function observeDelivery(context: ReportToolContext, taskId: string, kind: Resul
  */
 function scopeReviewDelivery(cwd: string, snapshot: DeliveryState): DeliveryState {
   // Docs, root Markdown and ignore policy are not runtime delivery; only code paths bind the review.
-  const codePaths = snapshot.paths.filter(
-    (path) =>
-      !path.startsWith('docs/') &&
-      (path.includes('/') || !path.endsWith('.md')) &&
-      path !== '.gitignore' &&
-      !path.endsWith('/.gitignore'),
-  );
+  const codePaths = snapshot.paths.filter((path) => isCodeDeliveryPath(path));
   if (codePaths.length === 0 || codePaths.length === snapshot.paths.length) {
     return snapshot;
   }

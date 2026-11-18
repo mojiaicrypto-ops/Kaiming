@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { createReportTool, type ReportToolContext } from '../src/tools/report-tools.ts';
+import { captureDirtyBaseline, digestOfPaths, type DirtyBaseline } from '../src/runtime/deliverable.ts';
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -34,6 +36,10 @@ function fixture(options: {
   requiresTest?: boolean;
   roleId?: string;
   expectedKind?: string;
+  /** A main design Task: the delivery is the design artifacts, not the code files. */
+  design?: boolean;
+  /** Prepares the project before the Task row exists; its return value becomes the dirty baseline. */
+  beforeTask?: (cwd: string) => DirtyBaseline;
 }): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'kaiming-report-'));
   dirs.push(root);
@@ -44,12 +50,14 @@ function fixture(options: {
   stores.push(store);
   store.createProject({ id: 'p-1', realPath: cwd });
   store.createSession({ id: 'c-1', projectId: 'p-1', roleId: 'chief', cwd });
+  const dirtyBaseline = options.beforeTask?.(cwd);
   const task = store.createTask({
     id: 't-1',
     projectId: 'p-1',
     chiefSessionId: 'c-1',
     ownerEpoch: 1,
     type: options.type,
+    ...(options.design === true ? { workKind: 'design' as const, flowVersion: 1, initialPhase: 'design' as const } : {}),
     requiresTest: options.requiresTest ?? false,
     goal: 'goal',
     scope: 'scope',
@@ -58,8 +66,10 @@ function fixture(options: {
     planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
     authorizationRefs: ['m-1'],
     sourceInputId: 'i-1',
+    ...(dirtyBaseline !== undefined ? { dirtyBaseline } : {}),
   });
-  store.updateTask({ taskId: task.id, phase: 'develop' });
+  // A design Task starts in its design phase; other Tasks move to develop before the member works.
+  if (options.design !== true) store.updateTask({ taskId: task.id, phase: 'develop' });
   store.createTaskSessions({
     taskId: task.id,
     members: [
@@ -67,7 +77,7 @@ function fixture(options: {
         sessionId: 'm-1',
         taskId: task.id,
         roleId: options.roleId ?? 'developer',
-        phase: 'develop',
+        phase: options.design === true ? 'design' : 'develop',
         label: 'work',
         instructions: 'do the work',
         refs: [],
@@ -567,5 +577,86 @@ describe('agent_report · expectedKind wedge', () => {
       checks: [{ name: 'smoke', status: 'passed' }],
     });
     expect(outcome).toBeDefined();
+  });
+});
+
+describe('inherited dirty files', () => {
+  function git(cwd: string, args: readonly string[]): void {
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd, stdio: 'ignore' });
+  }
+
+  /** A committed project plus the user's own uncommitted file, captured as the Task's baseline. */
+  function repoWithInherited(cwd: string): DirtyBaseline {
+    git(cwd, ['init', '--quiet']);
+    writeFileSync(join(cwd, 'a.ts'), 'export const a = 1;\n', 'utf8');
+    git(cwd, ['add', '--all']);
+    git(cwd, ['commit', '--quiet', '-m', 'base']);
+    writeFileSync(join(cwd, 'inherited.ts'), 'export const i = 1;\n', 'utf8');
+    return captureDirtyBaseline(cwd);
+  }
+
+  it('leaves a file inherited from the user out of the review delivery', async () => {
+    const f = fixture({ type: 'write', roleId: 'reviewer', expectedKind: 'review', beforeTask: repoWithInherited });
+
+    const result = await f.report.execute('call-1', report({ summary: 'reviewed', body: '# review\n\nfine\n', verdict: 'passed' }));
+
+    expect(result.isError).toBe(false);
+    const row = f.store.getResult(String(result.details['resultId']));
+    expect(row?.deliveryState?.paths).toContain('a.ts');
+    // The user's own uncommitted file is not this Task's delivery, and is not modified.
+    expect(row?.deliveryState?.paths).not.toContain('inherited.ts');
+    expect(readFileSync(join(f.cwd, 'inherited.ts'), 'utf8')).toContain('i = 1');
+  });
+
+  it('drops an inherited path that an older review row still lists', async () => {
+    const f = fixture({ type: 'write', roleId: 'tester', expectedKind: 'test', beforeTask: repoWithInherited });
+    // A review recorded before the baseline filter existed still lists the inherited path.
+    const oldPaths = ['a.ts', 'inherited.ts'];
+    f.store.recordResult({
+      resultId: 'r-old',
+      taskId: f.taskId,
+      sessionId: f.sessionId,
+      inputId: f.inputId,
+      roleId: 'reviewer',
+      kind: 'review',
+      summary: 'old review',
+      verdict: 'passed',
+      deliveryState: { paths: oldPaths, digest: digestOfPaths(f.cwd, oldPaths) },
+      bodyRef: { storage: 'server', path: '/tmp/old.md', sha256: 'x' },
+      basisRefs: [],
+      checks: [],
+    });
+
+    const result = await f.report.execute('call-1', report({ summary: 'tested', body: '# test\n\nfine\n', verdict: 'passed' }));
+
+    expect(result.isError).toBe(false);
+    const row = f.store.getResult(String(result.details['resultId']));
+    expect(row?.deliveryState?.paths).toEqual(['a.ts']);
+  });
+
+  it('excludes an inherited design artifact from a design review delivery', async () => {
+    const artifact = '.dev/product/account.md';
+    const content = '# 账号\n\n## 登录\n';
+    const f = fixture({
+      type: 'write',
+      roleId: 'reviewer',
+      expectedKind: 'review',
+      design: true,
+      beforeTask: (cwd) => {
+        mkdirSync(join(cwd, '.dev', 'product'), { recursive: true });
+        writeFileSync(join(cwd, artifact), content, 'utf8');
+        return { [artifact]: createHash('sha256').update(content).digest('hex') };
+      },
+    });
+
+    const result = await f.report.execute(
+      'call-1',
+      report({ summary: 'reviewed the design', body: '# review\n\nfine\n', verdict: 'passed' }),
+    );
+
+    expect(result.isError).toBe(false);
+    const row = f.store.getResult(String(result.details['resultId']));
+    // The design branch must filter too, or the completion recheck diverges forever.
+    expect(row?.deliveryState?.paths).not.toContain(artifact);
   });
 });

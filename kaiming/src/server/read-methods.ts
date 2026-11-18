@@ -533,7 +533,8 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       return {
         task: taskSummary(store, task),
         plan,
-        scopeCheck: planRead === undefined ? null : scopeCheckFor(project.realPath, planRead.text),
+        scopeCheck:
+          planRead === undefined ? null : scopeCheckFor(project.realPath, planRead.text, task.dirtyBaseline),
 
         members: store.listTaskSessions(task.id).map((member) => {
           // The delegation-time currentInputId is history; the live session state tells the

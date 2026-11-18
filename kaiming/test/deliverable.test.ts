@@ -3,7 +3,13 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { digestOfPaths, snapshotDelivery } from '../src/runtime/deliverable.ts';
+import {
+  captureDirtyBaseline,
+  digestOfPaths,
+  isReviewableDeliveryPath,
+  isUnchangedBaselineDirty,
+  snapshotDelivery,
+} from '../src/runtime/deliverable.ts';
 
 const dirs: string[] = [];
 
@@ -152,5 +158,130 @@ describe('delivery observation', () => {
     // Both states differ from the original and from each other: "unreadable" is not "gone".
     expect(unreadable).not.toBe(digestOfPaths(cwd, reviewed));
     expect(unreadable).not.toBe(missing);
+  });
+});
+
+describe('dirty baseline', () => {
+  /** A repository with one commit; `a.ts` and `src/b.ts` are clean tracked files. */
+  function repo(): string {
+    const cwd = project();
+    git(cwd, ['init']);
+    git(cwd, ['config', 'user.email', 'test@example.com']);
+    git(cwd, ['config', 'user.name', 'Test']);
+    git(cwd, ['add', '-A']);
+    git(cwd, ['commit', '-m', 'base']);
+    return cwd;
+  }
+
+  it('inherits only the files that were dirty at capture and frees one as soon as its bytes change', () => {
+    const cwd = repo();
+    // The user's own uncommitted work, present before the Task exists.
+    writeFileSync(join(cwd, 'src', 'b.ts'), 'export const b = 2;\n', 'utf8');
+    writeFileSync(join(cwd, 'untracked.ts'), 'export const u = 1;\n', 'utf8');
+
+    const baseline = captureDirtyBaseline(cwd);
+
+    expect(Object.keys(baseline).sort()).toEqual(['src/b.ts', 'untracked.ts']);
+    expect(isUnchangedBaselineDirty(cwd, 'src/b.ts', baseline)).toBe(true);
+    expect(isUnchangedBaselineDirty(cwd, 'untracked.ts', baseline)).toBe(true);
+    // A clean file was never inherited, and no baseline means no filtering at all.
+    expect(isUnchangedBaselineDirty(cwd, 'a.ts', baseline)).toBe(false);
+    expect(isUnchangedBaselineDirty(cwd, 'src/b.ts', null)).toBe(false);
+
+    // The Task (or anything else) touching the inherited file makes it this Task's change.
+    writeFileSync(join(cwd, 'src', 'b.ts'), 'export const b = 3;\n', 'utf8');
+    expect(isUnchangedBaselineDirty(cwd, 'src/b.ts', baseline)).toBe(false);
+  });
+
+  it('records a deleted-at-capture path as missing and releases it when the file returns', () => {
+    const cwd = repo();
+    rmSync(join(cwd, 'a.ts'));
+
+    const baseline = captureDirtyBaseline(cwd);
+
+    expect(baseline['a.ts']).toBe('missing');
+    expect(isUnchangedBaselineDirty(cwd, 'a.ts', baseline)).toBe(true);
+    writeFileSync(join(cwd, 'a.ts'), 'export const a = 2;\n', 'utf8');
+    expect(isUnchangedBaselineDirty(cwd, 'a.ts', baseline)).toBe(false);
+  });
+
+  it('captures nothing outside a git repository', () => {
+    const cwd = project();
+    writeFileSync(join(cwd, 'a.ts'), 'changed\n', 'utf8');
+
+    expect(captureDirtyBaseline(cwd)).toEqual({});
+  });
+});
+
+describe('monorepo baselines', () => {
+  it('keeps sibling repository paths out of a subdirectory project baseline', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'kaiming-monorepo-'));
+    dirs.push(repo);
+    const web = join(repo, 'apps', 'web');
+    mkdirSync(web, { recursive: true });
+    mkdirSync(join(repo, 'apps', 'api'), { recursive: true });
+    writeFileSync(join(web, 'local.ts'), 'export const l = 1;\n', 'utf8');
+    writeFileSync(join(repo, 'apps', 'api', 'sibling.ts'), 'export const s = 1;\n', 'utf8');
+    git(repo, ['init']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-m', 'base']);
+    // Both the project's own file and a sibling's file are dirty.
+    writeFileSync(join(web, 'local.ts'), 'export const l = 2;\n', 'utf8');
+    writeFileSync(join(repo, 'apps', 'api', 'sibling.ts'), 'export const s = 2;\n', 'utf8');
+
+    const baseline = captureDirtyBaseline(web);
+
+    expect(Object.keys(baseline)).toEqual(['local.ts']);
+    // A sibling path must not be hashed as a fake file under the project directory.
+    expect(baseline['apps/api/sibling.ts']).toBeUndefined();
+  });
+});
+
+describe('reviewable delivery paths', () => {
+  it('limits a re-review to what each Task binding can cover', () => {
+    const code = { design: false, codeBound: true };
+    expect(isReviewableDeliveryPath('src/a.ts', code)).toBe(true);
+    expect(isReviewableDeliveryPath('docs/guide.md', code)).toBe(false);
+    expect(isReviewableDeliveryPath('AGENTS.md', code)).toBe(false);
+    expect(isReviewableDeliveryPath('.dev/backlog.md', code)).toBe(false);
+
+    // A docs-only delivery keeps its documents bound; host bookkeeping and knowledge entries never
+    // are (settlement saves the latter, so their changes cannot demand a review).
+    const docs = { design: false, codeBound: false, excluded: new Set(['AGENTS.md']) };
+    expect(isReviewableDeliveryPath('docs/guide.md', docs)).toBe(true);
+    expect(isReviewableDeliveryPath('notes.md', docs)).toBe(true);
+    expect(isReviewableDeliveryPath('AGENTS.md', docs)).toBe(false);
+    expect(isReviewableDeliveryPath('.dev/backlog.md', docs)).toBe(false);
+
+    // A design Task binds its design artifacts only.
+    const design = { design: true, codeBound: false };
+    expect(isReviewableDeliveryPath('.dev/product/account.md', design)).toBe(true);
+    expect(isReviewableDeliveryPath('.dev/technical/module.md', design)).toBe(true);
+    expect(isReviewableDeliveryPath('src/a.ts', design)).toBe(false);
+    expect(isReviewableDeliveryPath('.dev/backlog.md', design)).toBe(false);
+  });
+
+  it('captures dirty design artifacts only for a design Task', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'kaiming-design-baseline-'));
+    dirs.push(repo);
+    mkdirSync(join(repo, '.dev', 'product'), { recursive: true });
+    writeFileSync(join(repo, '.dev', 'product', 'account.md'), '# 账号\n', 'utf8');
+    writeFileSync(join(repo, 'src.ts'), 'export const s = 1;\n', 'utf8');
+    git(repo, ['init']);
+    git(repo, ['config', 'user.email', 'test@example.com']);
+    git(repo, ['config', 'user.name', 'Test']);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-m', 'base']);
+    writeFileSync(join(repo, '.dev', 'product', 'account.md'), '# 账号（改）\n', 'utf8');
+    writeFileSync(join(repo, 'src.ts'), 'export const s = 2;\n', 'utf8');
+
+    expect(Object.keys(captureDirtyBaseline(repo, { design: true })).sort()).toEqual([
+      '.dev/product/account.md',
+      'src.ts',
+    ]);
+    // An ordinary Task never inherits host bookkeeping.
+    expect(Object.keys(captureDirtyBaseline(repo))).toEqual(['src.ts']);
   });
 });

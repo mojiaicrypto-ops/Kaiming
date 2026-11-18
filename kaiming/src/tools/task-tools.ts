@@ -30,6 +30,7 @@ import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, typ
 import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import { designCompletionGaps } from '../runtime/design-completion.ts';
 import { deliveryCommitGaps } from './completion-git.ts';
+import { captureDirtyBaseline } from '../runtime/deliverable.ts';
 
 export interface TaskToolContext {
   readonly store: Store;
@@ -451,6 +452,9 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
   const taskId = `t-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   const target = planTarget({ taskId, type, projectCwd: context.cwd, serverWorkDir: context.serverWorkDir });
   const intendedPlan = planRefFor(target, planMarkdown);
+  // Files the user already had dirty are not this Task's drift (P1-1); a read Task owns no delivery.
+  const dirtyBaseline =
+    type === 'write' ? captureDirtyBaseline(context.cwd, { design: workKind === 'design' }) : null;
   try {
     // Task row first: a refused create must not leave a plan file or a save receipt behind.
     const task = context.store.createTask({
@@ -473,6 +477,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       authorizationRefs: authorization.refs,
       sourceInputId: context.inputId,
       summary: `created (${workKind})`,
+      ...(dirtyBaseline !== null && Object.keys(dirtyBaseline).length > 0 ? { dirtyBaseline } : {}),
     });
 
     let planState = 'saved';
@@ -495,7 +500,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
           currentSessionIds: task.currentSessionIds,
           planRef: task.planRef,
           planState,
-          scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
+          scopeCheck: scopeCheckFor(context.cwd, planMarkdown, task.dirtyBaseline),
         },
       );
     }
@@ -506,7 +511,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
       planState,
-      scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
+      scopeCheck: scopeCheckFor(context.cwd, planMarkdown, task.dirtyBaseline),
       ...guidanceFor(context.store, task),
     });
   } catch (error) {
@@ -633,6 +638,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         scopeCheck: scopeCheckFor(
           context.cwd,
           planMarkdown ?? (task.planRef === null ? '' : readPlan(task.planRef).text),
+          task.dirtyBaseline,
         ),
         ...guidance,
       },
@@ -841,12 +847,13 @@ function getOp(
       }
     }
   }
+  const scopeCheck = scopeCheckFor(context.cwd, plan.text, task.dirtyBaseline);
   return ok(`Task ${task.id}: ${task.phase} (${task.status})`, {
     task: taskSummaryJson(task),
     planText: plan.text,
     planCurrent: plan.current,
-    scopeCheck: scopeCheckFor(context.cwd, plan.text),
-    scopeCheckText: scopeCheckText(scopeCheckFor(context.cwd, plan.text)),
+    scopeCheck,
+    scopeCheckText: scopeCheckText(scopeCheck),
     ...(backlogHints.length > 0 ? { backlogHints } : {}),
     members,
     results,

@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Store, TaskRow } from '../src/store/store.ts';
 import { designCompletionGaps } from '../src/runtime/design-completion.ts';
-import { snapshotDesignDelivery } from '../src/runtime/deliverable.ts';
+import { snapshotDesignDelivery, withoutInherited } from '../src/runtime/deliverable.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -69,6 +70,7 @@ function task(overrides: Partial<TaskRow> = {}): TaskRow {
     nextStep: null,
     blockReason: null,
     completionResultId: null,
+    dirtyBaseline: null,
     sourceInputId: 'i-1',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -95,6 +97,19 @@ describe('design completion', () => {
     const cwd = project();
     const review = { deliveryState: snapshotDesignDelivery(cwd) };
     expect(designCompletionGaps(storeWith(review), cwd, task())).toEqual([]);
+  });
+
+  it('does not treat a design artifact inherited as dirty as a post-review change', () => {
+    const cwd = project();
+    const inherited = '.dev/product/account.md';
+    const dirtyBaseline = {
+      [inherited]: createHash('sha256').update(readFileSync(join(cwd, inherited))).digest('hex'),
+    };
+    const taskRow = task({ dirtyBaseline });
+    // The review recorded the filtered snapshot; the completion recheck must filter identically.
+    const review = { deliveryState: withoutInherited(cwd, snapshotDesignDelivery(cwd), dirtyBaseline) };
+
+    expect(designCompletionGaps(storeWith(review), cwd, taskRow)).toEqual([]);
   });
 
   it('rejects spec changes after review', () => {

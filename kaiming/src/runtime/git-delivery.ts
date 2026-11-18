@@ -224,8 +224,15 @@ export function changedProjectPaths(cwd: string): readonly string[] {
   const prefix = prefixRun.ok ? prefixRun.stdout.trim() : '';
   const status = runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   if (!status.ok) return [];
-  return dirtyPaths(status.stdout)
-    .map((path) => (prefix !== '' && path.startsWith(prefix) ? path.slice(prefix.length) : path))
+  const paths = dirtyPaths(status.stdout);
+  // Only this project's own files: in a monorepo a dirty sibling (apps/api while the project is
+  // apps/web) is a repository path that does not exist under this cwd, and joining it would invent a
+  // file. With no prefix the whole repository is the project.
+  return (
+    prefix === ''
+      ? paths
+      : paths.filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length))
+  )
     .filter((path) => path !== '')
     .sort();
 }

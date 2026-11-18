@@ -7,7 +7,14 @@
  */
 import { createHash } from 'node:crypto';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { digestOfPaths, type DeliveryState } from '../runtime/deliverable.ts';
+import {
+  changedInheritedPaths,
+  digestOfPaths,
+  isCodeDeliveryPath,
+  type DeliveryState,
+  type DirtyBaseline,
+} from '../runtime/deliverable.ts';
+import { knowledgeEntryPaths } from '../runtime/project-store.ts';
 
 export type InputStatus =
   | 'queued'
@@ -132,6 +139,8 @@ export interface TaskRow {
   readonly nextStep: string | null;
   readonly blockReason: string | null;
   readonly completionResultId: string | null;
+  /** Content identity of files that were already dirty when the Task was created (S2 v20). */
+  readonly dirtyBaseline: DirtyBaseline | null;
   readonly sourceInputId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -166,6 +175,8 @@ export interface CreateTaskParams {
   readonly authorizationRefs: readonly string[];
   readonly sourceInputId: string;
   readonly summary?: string;
+  /** Captured by the caller for write Tasks; omitted or null means no filtering. */
+  readonly dirtyBaseline?: DirtyBaseline | null;
 }
 
 export interface UpdateTaskParams {
@@ -426,7 +437,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -569,6 +580,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   nextStep TEXT,
   blockReason TEXT,
   completionResultId TEXT,
+  dirtyBaseline TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -2409,8 +2421,8 @@ export class Store {
            (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
             workKind, flowVersion, reworkCount, requiresTest, goal, scope, acceptanceRefs, basisRefs,
             planRef, authorizationRefs, phase, currentSessionIds, status, revision, summary,
-            sourceInputId, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?)`,)
+            dirtyBaseline, sourceInputId, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?, ?)`,)
           .run(
             params.id,
             params.projectId,
@@ -2430,6 +2442,9 @@ export class Store {
             canonical(params.authorizationRefs),
             params.initialPhase ?? (params.workKind === 'design' ? 'design' : 'plan'),
             params.summary ?? '',
+            params.dirtyBaseline == null || Object.keys(params.dirtyBaseline).length === 0
+              ? null
+              : canonical(params.dirtyBaseline),
             params.sourceInputId,
             timestamp,
             timestamp,
@@ -2669,6 +2684,21 @@ export class Store {
       gaps.push(
         `the delivery changed after the last passed review (${review.resultId}); review the current delivery again`,
       );
+    }
+    if (reviewed !== null) {
+      // An inherited file that changed after the review was never in its path list: the review did
+      // not cover that change, so the delivery needs a new review rather than a commit. Only paths a
+      // review could bind count; settlement output and host bookkeeping never demand one.
+      const uncovered = changedInheritedPaths(this.requireTaskCwd(task), task.dirtyBaseline, reviewed.paths, {
+        design: task.workKind === 'design' && task.flowVersion >= 1,
+        codeBound: reviewed.paths.some((path) => isCodeDeliveryPath(path)),
+        excluded: new Set(knowledgeEntryPaths(this.getProject(task.projectId)?.initializationRef)),
+      });
+      if (uncovered.length > 0) {
+        gaps.push(
+          `files that were already dirty when the Task was created changed after the last passed review (${uncovered.join(', ')}); review the current delivery again`,
+        );
+      }
     }
     if (task.requiresTest) {
       const test = latestPassed('test');
@@ -3429,6 +3459,14 @@ export class Store {
     });
   }
 
+  /** v19 → v20: a write Task records which dirty files it inherited (dirty-worktree isolation). */
+  private migrateV19ToV20(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'dirtyBaseline', 'TEXT');
+      this.db.exec('PRAGMA user_version = 20;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3570,6 +3608,7 @@ export class Store {
         [16, () => this.migrateV16ToV17()],
         [17, () => this.migrateV17ToV18()],
         [18, () => this.migrateV18ToV19()],
+        [19, () => this.migrateV19ToV20()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3843,6 +3882,7 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     nextStep: nullable(row['nextStep']),
     blockReason: nullable(row['blockReason']),
     completionResultId: nullable(row['completionResultId']),
+    dirtyBaseline: parseDirtyBaseline(row['dirtyBaseline']),
     sourceInputId: String(row['sourceInputId']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),
@@ -3858,4 +3898,12 @@ function parseDeliveryState(value: unknown): DeliveryState | null {
     return null;
   }
   return { digest: record.digest, paths: record.paths.filter((path): path is string => typeof path === 'string') };
+}
+
+/** A JSON path→hash map; an empty or malformed value means "no baseline recorded". */
+function parseDirtyBaseline(value: unknown): DirtyBaseline | null {
+  const parsed = parseJsonOrNull(value);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const entries = Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  return entries.length === 0 ? null : Object.fromEntries(entries);
 }

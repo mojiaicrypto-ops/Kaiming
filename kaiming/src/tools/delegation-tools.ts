@@ -87,7 +87,7 @@ function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelop
     ...(task.planRef !== null ? { planPath: task.planRef.path } : {}),
     ...(planText !== undefined ? { acceptance: acceptanceText(planText) } : {}),
     ...(planText !== undefined
-      ? { scopeLine: scopeCheckText(scopeCheckFor(context.cwd, planText)) }
+      ? { scopeLine: scopeCheckText(scopeCheckFor(context.cwd, planText, task.dirtyBaseline)) }
       : {}),
     upstream,
   };

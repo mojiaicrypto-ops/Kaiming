@@ -7,6 +7,8 @@
  */
 import type { Store, TaskRow } from '../store/store.ts';
 import { commitGaps, ignoredProjectPaths, observeCommit } from '../runtime/git-delivery.ts';
+import { changedInheritedPaths, isCodeDeliveryPath, isUnchangedBaselineDirty } from '../runtime/deliverable.ts';
+import { knowledgeEntryPaths } from '../runtime/project-store.ts';
 
 export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
   if (task.type !== 'write') return [];
@@ -32,6 +34,17 @@ export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
       `the reviewed delivery's ignored paths could not be checked (${observation.detail}); restore git, then end again`,
     ];
   }
-  const paths = observation.ignored.size === 0 ? reviewed : reviewed.filter((path) => !observation.ignored.has(path));
-  return [...commitGaps(observeCommit(cwd, paths))];
+  const committed = observation.ignored.size === 0 ? reviewed : reviewed.filter((path) => !observation.ignored.has(path));
+  // A file that was already dirty when the Task was created and whose bytes did not change is the
+  // user's own work: never a reason to refuse completion (P1-1). This also covers a review row
+  // recorded before the baseline existed.
+  const reviewedPaths = committed.filter((path) => !isUnchangedBaselineDirty(cwd, path, task.dirtyBaseline));
+  // An inherited file that changed after the review was never in the reviewed list; it is this
+  // Task's delivery now, so its commit state is checked as well (only where a review could bind it).
+  const changedInherited = changedInheritedPaths(cwd, task.dirtyBaseline, reviewed, {
+    design: task.workKind === 'design' && task.flowVersion >= 1,
+    codeBound: reviewed.some((path) => isCodeDeliveryPath(path)),
+    excluded: new Set(knowledgeEntryPaths(store.getProject(task.projectId)?.initializationRef)),
+  });
+  return [...commitGaps(observeCommit(cwd, [...reviewedPaths, ...changedInherited]))];
 }

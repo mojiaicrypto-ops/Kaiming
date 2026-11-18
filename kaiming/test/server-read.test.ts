@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,6 +10,7 @@ import { createWorkbenchServer } from '../src/server/http.ts';
 import { registerCoreMethods } from '../src/server/methods.ts';
 import { registerReadMethods } from '../src/server/read-methods.ts';
 import { digestOfText } from '../src/runtime/plan-store.ts';
+import { captureDirtyBaseline } from '../src/runtime/deliverable.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -966,4 +968,49 @@ describe('read-only query surface', () => {
     expect(interactions[0]).toMatchObject({ interactionId: 'q-read', method: 'select', options: ['继续', '暂停'] });
   });
 
+
+  it('leaves a file inherited as dirty out of the scope check it returns', async () => {
+    const h = await harness();
+    const git = (args: readonly string[]): void => {
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
+        cwd: h.projectRoot,
+        stdio: 'ignore',
+      });
+    };
+    git(['init', '--quiet']);
+    git(['add', '--all']);
+    git(['commit', '--quiet', '-m', 'base']);
+    // The user's own uncommitted file, captured as the Task's baseline before it exists.
+    writeFileSync(join(h.projectRoot, 'inherited.ts'), 'export const i = 1;\n', 'utf8');
+    const dirtyBaseline = captureDirtyBaseline(h.projectRoot);
+    const planPath = join(h.projectRoot, '.dev', 'work', 't-inherited', 'plan.md');
+    mkdirSync(dirname(planPath), { recursive: true });
+    const planText = '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable\n';
+    writeFileSync(planPath, planText, 'utf8');
+    // The harness already owns an open Task for s-chief; this Task needs its own chief slot.
+    h.store.createSession({ id: 's-chief-2', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    h.store.createTask({
+      id: 't-inherited',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief-2',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'project', path: planPath, sha256: digestOfText(planText) },
+      authorizationRefs: [],
+      sourceInputId: 'i-user',
+      dirtyBaseline,
+    });
+
+    const got = await h.call('task.get', { projectId: h.projectId, taskId: 't-inherited' });
+
+    expect(got.status).toBe(200);
+    const scopeCheck = (got.body['result'] as { scopeCheck: { outOfScope: string[] } }).scopeCheck;
+    // Reproduction of the dropped-baseline defect: this would list inherited.ts as drift.
+    expect(scopeCheck.outOfScope).toEqual([]);
+  });
 });

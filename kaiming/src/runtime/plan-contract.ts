@@ -5,6 +5,7 @@
  */
 import { matchesGlob } from 'node:path';
 import { changedProjectPaths } from './git-delivery.ts';
+import { isUnchangedBaselineDirty, type DirtyBaseline } from './deliverable.ts';
 
 const ACCEPTANCE_NAMES = ['验收', 'acceptance', 'acceptance criteria'];
 const SCOPE_NAMES = ['范围', 'scope'];
@@ -140,13 +141,22 @@ export function scopeDrift(
   return { declared, outOfScope: [...new Set(outOfScope)].sort() };
 }
 
-/** The check attached to dispatch and task.get: declared paths plus files that fall outside them. */
-export function scopeCheckFor(cwd: string, planMarkdown: string | undefined): ScopeCheck {
+/**
+ * The check attached to dispatch and task.get: declared paths plus files that fall outside them.
+ * A file that was already dirty when the Task was created and whose bytes did not change is the
+ * user's own work, not this Task's drift; once its bytes change it is drift like any other.
+ */
+export function scopeCheckFor(
+  cwd: string,
+  planMarkdown: string | undefined,
+  baseline?: DirtyBaseline | null,
+): ScopeCheck {
   const declared = planMarkdown === undefined ? null : extractScope(planMarkdown);
   if (declared === null) {
     return { declared: null, outOfScope: [] };
   }
-  return scopeDrift(planMarkdown ?? '', changedProjectPaths(cwd));
+  const changed = changedProjectPaths(cwd).filter((path) => !isUnchangedBaselineDirty(cwd, path, baseline));
+  return scopeDrift(planMarkdown ?? '', changed);
 }
 
 /** One line for the model: what the Plan declares and which files are outside it. */
