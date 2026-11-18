@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Store } from '../src/store/store.ts';
-import type { DelegationReturn } from '../src/tools/delegation-tools.ts';
+import { Store, type TaskRow } from '../src/store/store.ts';
+import { buildDispatchEnvelope, type DelegationReturn } from '../src/tools/delegation-tools.ts';
 import { createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 
 const dirs: string[] = [];
@@ -201,6 +201,58 @@ describe('task dispatch', () => {
     expect(delivered).toContain('REPORT_MISSING');
     // A first dispatch has no earlier reports to summarize.
     expect(delivered).not.toContain('Upstream results:');
+  });
+
+  it('tells a designer on a design Task where documents and slices must go, and only there', () => {
+    const task: TaskRow = {
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      ownerEpoch: 1,
+      requirementId: null,
+      backlogIds: [],
+      type: 'write',
+      workKind: 'design',
+      flowVersion: 1,
+      reworkCount: 0,
+      requiresTest: false,
+      goal: 'design the reset flow',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: null,
+      authorizationRefs: ['i-dec'],
+      phase: 'design',
+      currentSessionIds: [],
+      status: 'active',
+      revision: 1,
+      summary: '',
+      nextStep: null,
+      blockReason: null,
+      completionResultId: null,
+      dirtyBaseline: null,
+      sourceInputId: 'i-dec',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const envelope = (memberRole: string, expectedKind: string, overrides: Partial<TaskRow> = {}): string =>
+      buildDispatchEnvelope(
+        { ...task, ...overrides },
+        { roleId: memberRole, expectedKind, writeScope: [], refs: [], isContinuation: false },
+        { upstream: [] },
+      );
+
+    const designer = envelope('designer', 'design');
+    expect(designer).toContain('Design delivery: formal documents go under .dev/product/ and .dev/technical/');
+    expect(designer).toContain('create slices with backlog(op=add)');
+    expect(designer).toContain('backlog(op=edit) is a literal replacement');
+
+    // Negative controls: the fact follows the design designer, not every dispatch or every work kind.
+    expect(envelope('developer', 'implementation', { workKind: 'implement', phase: 'develop' })).not.toContain(
+      'Design delivery:',
+    );
+    expect(envelope('reviewer', 'review', { phase: 'review' })).not.toContain('Design delivery:');
+    expect(envelope('designer', 'design', { workKind: 'document', phase: 'plan' })).not.toContain('Design delivery:');
   });
 
   it('names the upstream report paths for a review-phase dispatch', async () => {

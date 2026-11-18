@@ -96,7 +96,7 @@ Review/Test checks are evidence only when actually run. A negative control is re
 | get | id → 完整条目（含原文）、关联 Task 的真实状态（含最近一次已结束或已取消的关联）、引用/格式问题 | 同上 |
 | add | title、body、specRefs? → 新条目；designer/settler 在 Task 内调用时宿主自动把当前 Task 写入 `Task`（产生者），chief/界面新增不写 | chief、designer、settler |
 | close | id、state（done/dropped）、note、taskIds? → 新条目 | chief、settler |
-| edit | oldText、newText → 重新解析后的 items、issues、warnings | chief、designer、settler |
+| edit | oldText、newText → 重新解析后的 items、issues、warnings。纯文本替换：不刷新 `更新:`、不绑定当前 Task；把已有条目补成设计切片时，`- 规格:`（及适用的 `- Task:`）要写进 newText | chief、designer、settler |
 
 - op 级权限按 roleId 拒绝；developer 只有 list/get，reviewer/tester/investigator 不挂载该工具。
 - **不携带版本**：add 在项目锁内分配编号；close 只核对条目存在、没有格式问题、状态为 open；edit 要求 oldText 在文件中恰好出现一次，否则拒绝并返回当前内容，不覆盖。用户在编辑器里的改动由读回核对发现。
@@ -174,6 +174,8 @@ chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
 宿主实际读取并注入上述正文，不用角色名、短规则块或链接代替。共同规则唯一位于 [specialists](prompts/specialists.md)；基础规则唯一位于 [base](prompts/base.md)；chief 不注入专业共同规则。各完整角色正文唯一按下表装配，文档状态说明不作为角色正文。
 
 正文提取边界固定：base 从第一个 `## Base rules` 到文件末尾（含 `## Judgment and expression`）；specialists 从 `## Shared rules` 到 `## Role file map` 之前；chief 与各专业角色从 `## Role and goal` 到文件末尾。保留正文内的各节，不只取第一个小节；文档标题/状态说明与角色映射表不进入模型。
+
+base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.dev/INDEX.md`、`.dev/product/`、`.dev/technical/`、`.dev/backlog.md`、`.dev/work/<taskId>/`），不依赖某个专业角色正文；chief 正文写明设计完成门禁只读 `.dev/product/` 与 `.dev/technical/`（初始化的入口文件由结算保存，不进入门禁）。design Task 派发给 designer 时，宿主信封追加同一条事实与切片写入通道（新切片用 `add`，`edit` 是纯文本替换）。
 
 **语言**：注入模型的系统级文本（九份角色提示词正文、项目入口 AGENTS.md、工具描述与 schema、宿主生成的指令与通知）默认使用英文；模型对用户的自然语言回复跟随用户输入语言。检查入口：`kaiming/checks/prompt-language.ts`（按上述边界抽取并断言无中日韩字符、边界可解析、角色正文齐全）。
 

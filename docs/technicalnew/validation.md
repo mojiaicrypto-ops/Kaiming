@@ -142,3 +142,9 @@
 - **问题**：待办抽屉的正文 textarea 复用了 `.inp` 的固定 32px 高度，rows 不生效，正文实际只有一行可见；规格引用同样如此，抽屉固定 560px。
 - **实现**：32px 只属于单行输入，`textarea.inp` 高度自适应并多行排版；正文编辑器至少 `max(240px, 34vh)`；待办抽屉宽 `min(760px, 94vw)`（≤560px 全宽）。
 - **证据**：真实 CharKeep 项目实测 1440×900 下抽屉 760px、正文 695×306、规格 96px；390×844 下抽屉全宽、正文 357×287、无横向溢出。`webapp` 140/140、project 浏览器 16/16 通过。
+
+### 2026-11-18 · P2-6 设计目录可见性与 backlog edit 语义
+
+- **问题**：设计完成门禁只读 `.dev/product/`/`.dev/technical/`，但这两条路径只写在 designer 正文；主管据此把设计写进 `.dev/specs`/`.dev/tech` 后被门禁拒绝。backlog 工具描述把 add/close/edit 统称为“Writes allocate ids…”，主管误以为 `edit` 会刷新更新时间并绑定设计 Task。
+- **实现**：base v6 固定写明知识目录；chief v8 写明设计门禁路径与切片写入通道；backlog/project 工具描述改准确；design+designer 派发信封追加同一条宿主事实。存储行为未改：`edit` 仍是纯文本替换，不新增 op。
+- **证据**：design designer 信封含目录门禁与 add/edit 说明，developer 与 reviewer 信封不含（负向对照）；chief 装配文本包含目录与门禁句，且不包含 designer 的 “Default responsibilities”（说明来自 base）。`delegation+context` 32/32、`backlog-tools+task-tools+project` 42/42、`tsc`、`check:prompts` 15/15。提示词需重启 workbench 后生效。

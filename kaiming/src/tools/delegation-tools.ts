@@ -47,6 +47,11 @@ export function buildDispatchEnvelope(
     `Task ${task.id} (${task.type}, workKind=${task.workKind}, phase=${task.phase}, role=${member.roleId}, expectedKind=${member.expectedKind})`,
     `Goal: ${task.goal}`,
   ];
+  if (task.workKind === 'design' && member.roleId === 'designer') {
+    lines.push(
+      'Design delivery: formal documents go under .dev/product/ and .dev/technical/ (the Task completion gate reads them); create slices with backlog(op=add) so the host records this Task as producer. backlog(op=edit) is a literal replacement that neither refreshes the updated time nor binds the Task.',
+    );
+  }
   if (!member.isContinuation && facts.planPath !== undefined) {
     lines.push(`Plan path: ${facts.planPath}`);
   }

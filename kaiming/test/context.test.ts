@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildTurnContextText } from '../src/runtime/context.ts';
-import { sliceInjectedBody } from '../src/runtime/prompt-assembly.ts';
+import { assembleSystemPrompt, loadPromptBodies, sliceInjectedBody } from '../src/runtime/prompt-assembly.ts';
 
 const PROMPT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -107,5 +107,20 @@ describe('turn context text', () => {
         'Formal grounds: none',
       ].join('\n'),
     );
+  });
+});
+
+describe('project knowledge layout in the assembled prompt', () => {
+  it('reaches the chief from base, without the designer-only body', () => {
+    const bodies = loadPromptBodies(PROMPT_DIR);
+    const chief = assembleSystemPrompt(bodies, 'chief').text;
+
+    expect(chief).toContain('`AGENTS.md` and `.dev/PROJECT.md` carry the rules');
+    expect(chief).toContain('`.dev/product/` holds product specs');
+    expect(chief).toContain('The completion gate of a design Task reads');
+    // The layout lives in base, so every assembled role gets it, not just the chief.
+    expect(assembleSystemPrompt(bodies, 'developer').text).toContain('`.dev/product/` holds product specs');
+    // The designer's default-directory note is a different body; the chief gets the fact from base.
+    expect(chief).not.toContain('Default responsibilities');
   });
 });

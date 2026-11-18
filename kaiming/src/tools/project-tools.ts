@@ -70,6 +70,7 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
     label: 'project',
     description: [
       'Initialize the project knowledge entries: a preview shows the real gaps and the exact files; writing needs the user decision cited.',
+      'The project knowledge layout is fixed: `AGENTS.md` and `.dev/PROJECT.md` carry the rules, `.dev/INDEX.md` navigates, `.dev/product/` holds product specs, `.dev/technical/` holds technical specs and contracts, `.dev/backlog.md` holds items and slices. A design Task\'s completion gate reads `.dev/product/` and `.dev/technical/`.',
       'Write the same content you previewed. If someone changed a file in between, the current content is returned instead of overwriting it.',
     ].join('\n'),
     parameters: {
