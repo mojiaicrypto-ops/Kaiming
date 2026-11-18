@@ -98,3 +98,10 @@
 - **实现**：`delegation-tools.ts` 新增纯函数 `buildDispatchEnvelope`，宿主把 Task 身份/目标、新建成员的计划路径与验收摘要（≤1500 字符）、范围核对、writeScope/引用、Review/Test/Settle 的最新上游报告与 `agent_report` 硬性收尾（review/test 需 verdict）写进 **Pi payload**；`task_sessions.instructions` 保持主管原话。`store.continueTaskSession` 接受可选 `inputPayload`，续办同样携带信封。`runner.ts` 新增 `recoverMissingReport`：成员正常停稳但无结果时先发一次隐藏补交提醒（`display=false`），补交成功即 `completed`，仍无报告才 `REPORT_MISSING`；隐藏 turn 类型统一收敛到 `model-output-guard.ts` 的 `isHiddenInternalTurnEvent`，浏览器流与历史重载都看不到。
 - **证据**：`test/delegation.test.ts` 断言 instructions 列为原文而 payload 含信封、Review 阶段带上游 implementation 路径；`test/runtime.test.ts` 正向自愈（prose → 提醒 → `agent_report` → `completed`，1 条结果、提醒 `display:false`）与负向控制（两次纯文本 → `failed/REPORT_MISSING`、历史中提醒恰好 1 次、含 verdict 指引）；独立 Test 以删掉唯一调用点的变异验证正向用例真的变红并逐字节还原。定向 3 文件 99 用例、关联 5 文件 133 用例、`tsc --noEmit` 通过。独立 Review 结论 pass，唯一 minor（纯等待路径也计算信封）已修复。
 - **边界**：补交每输入最多一次，不重放工作；服务端丢弃隐藏 turn 只有谓词单测 + 一行接线，没有端到端断言（登记为覆盖缺口）；`recoverMissingReport` 的六个短路条件各自没有独立用例（改动它们只会多/少一次无害提醒）。
+
+### 2026-11-18 · P0-3 委派等待窗口与唤醒闭环（关闭 C8）
+
+- **根因**：`dispatch` 缺省只等 120 秒，而 C10 已把 `settleStep` 排除在主管看门狗之外——2 分钟超时只是让主管在长开发/测试中反复跑空名单回合。另外三条转换会让当前步骤停稳却不产生 run outcome：`task.control(resume)`、`session.input.stop` 停掉 queued 成员、`session.recovery.resolve` 关闭 interrupted 成员；它们都不触发宿主唤醒，主管要等用户开口才继续。
+- **实现**：`delegation-tools.ts` 缺省等待改为 600 秒、上限 1_800 秒（下限 1 秒不变）。`write-methods.ts` 新增 `wakeSettledStep`：沿用 `wakeForSettledStep` 的全部去重/忙/Task 状态规则，成功时使主管会话失效并在 queued 停止路径立即 `notify()`；wake 抛错不会让已完成的转换变成 RPC 失败。主管回合内自己调用 control/recover 不另行唤醒（它正在 processing，结果必为 `chief-busy`）。
+- **证据**：`test/server-write.test.ts` 三条正向路径各断言恰好一条 `notice-step-*`、其 `taskId` 属于本 Task、主管会话被 invalidate；负向控制两条——同步骤仍有 queued 成员时零通知、Task 暂停时零通知。`test/delegation.test.ts` 断言缺省 600_000 与上限夹取 1_800_000。独立 Test 逐条删除三个唤醒调用点，对应用例均按预期变红并逐字节还原；把 `UNSETTLED` 改成只认 `processing` 时负向控制变红。定向 4 文件 59 用例、`tsc --noEmit` 通过。独立 Review 结论 pass，四条 P3（停止路径漏 `notify`、invalidate 未测、暂停负向缺失、R3 路由措辞）均已修复。
+- **边界**：wake 抛错分支只靠代码检视；pause/cancel 与 `input.taskId === null` 短路没有 RPC 级用例；主管在回合内用 `task(op=recover)` 关闭中断成员后若直接结束回合，仍属既有空档（唤醒发生时主管已在 processing），不改动。

@@ -23,3 +23,10 @@ Plan: [plan.md](plan.md)
 ## Deviation from the roadmap text
 
 - The wake call lives only in the three write RPC paths. The roadmap also suggested `runner.controlTask` / `task(op=control)` / `task(op=recover)`; in those paths the chief is `processing`, so `wakeForSettledStep` returns `chief-busy` and adds nothing. Recorded in the R3 contract line.
+
+## Post-review fixes (2026-11-18)
+
+- `wakeSettledStep` returns whether it queued a notice; the queued-stop branch calls `options.notify()` on `true`, so the chief's notice is claimed at once instead of on the next idle pass.
+- Harness records `invalidate` calls; the three positive tests assert the chief session is invalidated with entity `session`, and each asserts the notice names its own Task (guards against a mis-targeted wake).
+- New negative control: a paused Task whose queued member is stopped produces no notice (`not-running`).
+- R3 wording corrected: the wake reuses the existing routing, including `notice-<member input>` when a member of the step is still interrupted.
