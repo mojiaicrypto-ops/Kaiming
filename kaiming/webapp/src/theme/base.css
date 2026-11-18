@@ -1899,6 +1899,11 @@ details.fold > summary.tline:hover {
     opacity: 1;
   }
 }
+
+/* Backlog detail edits prose and references: it needs more width than a status drawer. */
+.drawer.drawer-backlog {
+  width: min(760px, 94vw);
+}
 .drawer .dh {
   padding: var(--s6) var(--s8) var(--s3);
   display: flex;
@@ -3271,6 +3276,18 @@ details > summary {
 .inp:focus {
   border-color: var(--accent);
 }
+
+/* `.inp`'s 32px is a one-line input height; a textarea is an editor. */
+textarea.inp {
+  height: auto;
+  min-height: 96px;
+  padding: var(--s2) var(--s3);
+  line-height: 1.6;
+  resize: vertical;
+}
+.drawer-backlog .backlog-body {
+  min-height: max(240px, 34vh);
+}
 .toasts {
   position: fixed;
   bottom: 44px;
@@ -3544,7 +3561,8 @@ details > summary {
   .rc {
     padding: var(--s3);
   }
-  .drawer {
+  .drawer,
+  .drawer.drawer-backlog {
     width: 100vw;
   }
   .ao {

@@ -114,6 +114,7 @@ export function BacklogDrawer({
 
   return (
     <Drawer
+      className="drawer-backlog"
       eyebrow={`${item.id} · ${open ? t('backlog.stateOpen') : item.state === 'done' ? t('backlog.stateDone') : t('backlog.stateDropped')}`}
       title={item.title}
       onClose={onClose}
@@ -194,7 +195,13 @@ export function BacklogDrawer({
       </div>
       <div className="sec">
         <div className="sh">{t('backlog.body')}</div>
-        <textarea className="inp" rows={6} value={body} onChange={(event) => setBody(event.target.value)} disabled={!open} />
+        <textarea
+          className="inp backlog-body"
+          rows={8}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          disabled={!open}
+        />
       </div>
       {open && (
         <button type="button" className="btn" data-testid="backlog-save" disabled={busy} onClick={() => void save()}>
