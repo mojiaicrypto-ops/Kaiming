@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1988,6 +1989,133 @@ describe('input runner', () => {
     // A review member is told the verdict field is required.
     expect(history).toContain('plus `verdict`');
   }, 30_000);
+
+  it('tells a settler the committed settlement file is the body', async () => {
+    const h = await harness({
+      replies: [
+        { kind: 'text', text: 'settled' },
+        { kind: 'text', text: 'still nothing' },
+      ],
+    });
+    const task = h.store.createTask({
+      id: 't-settler-reminder',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'settle the change',
+      scope: 'deploy',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'settle' });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-settler-reminder',
+          taskId: task.id,
+          roleId: 'settler',
+          phase: 'settle',
+          label: 'settle',
+          instructions: 'settle it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'settlement',
+          inputId: 'i-settler-reminder',
+          inputPayload: { content: [{ type: 'text', text: 'settle it' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-settler-reminder');
+
+    // Two prose-only turns still fail: the reminder must not turn a missing report into a pass.
+    expect(outcome.kind).toBe('failed');
+    expect(h.store.getInput('i-settler-reminder')).toMatchObject({
+      status: 'failed',
+      errorCode: 'REPORT_MISSING',
+    });
+    const history = readFileSync(h.store.getSessionBinding('s-settler-reminder')?.piFile ?? '', 'utf8');
+    expect(history.match(/kaiming\.report-missing-recovery/g) ?? []).toHaveLength(1);
+    // The reminder points at the committed file instead of asking for the Markdown again.
+    expect(history).toContain('settlement.md is the body');
+    expect(history).toContain('pass `body` only when that file is missing');
+    expect(history).not.toContain('`summary` and `body`');
+  }, 30_000);
+
+  it('accepts a settler report that carries no body once the settlement file is written', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'agent_report',
+              arguments: JSON.stringify({
+                summary: 'settled the change',
+                checks: [{ name: 'git status', status: 'passed' }],
+              }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'settlement recorded' },
+      ],
+    });
+    const task = h.store.createTask({
+      id: 't-settler-e2e',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'settle the change',
+      scope: 'deploy',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'settle' });
+    // The settler writes and commits the file before reporting, exactly as the prompt says.
+    const settlementPath = join(h.cwd, '.dev', 'work', task.id, 's-settler-e2e', 'settlement.md');
+    const settlementBody = '# settlement\n\nall checks passed; delivery committed\n';
+    mkdirSync(join(h.cwd, '.dev', 'work', task.id, 's-settler-e2e'), { recursive: true });
+    writeFileSync(settlementPath, settlementBody, 'utf8');
+    const digest = createHash('sha256').update(settlementBody).digest('hex');
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-settler-e2e',
+          taskId: task.id,
+          roleId: 'settler',
+          phase: 'settle',
+          label: 'settle',
+          instructions: 'settle it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'settlement',
+          inputId: 'i-settler-e2e',
+          inputPayload: { content: [{ type: 'text', text: 'settle it' }] },
+        },
+      ],
+    });
+
+    // The schema must accept the body-less call: Pi validates the arguments before the tool runs.
+    const outcome = await h.runner.runNext('s-settler-e2e');
+
+    expect(outcome.kind).toBe('completed');
+    const results = h.store.resultsForInputs(['i-settler-e2e']);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.bodyRef).toMatchObject({ path: settlementPath, sha256: digest });
+    expect(readFileSync(settlementPath, 'utf8')).toBe(settlementBody);
+  }, 60_000);
 
   it('terminates a member run after five failed report attempts, one corrective turn, and five more', async () => {
     // The 2026-11-13 settler incident, replayed with the stub model: every agent_report call fails

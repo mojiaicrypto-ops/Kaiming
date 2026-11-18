@@ -287,7 +287,7 @@ export class InputRunner {
                 type: 'text',
                 text:
                   fault.code === REPORT_RETRY_EXHAUSTED
-                    ? `Your report attempts keep failing: ${fault.detail}. Reissue exactly one agent_report tool call with valid JSON arguments: both summary and body are required strings; keep the body under 8 KB and do not repeat the failed arguments.`
+                    ? `Your report attempts keep failing: ${fault.detail}. Reissue exactly one agent_report tool call with valid JSON arguments: ${this.reportFields(sessionId)}; keep any body under 8 KB and do not repeat the failed arguments.`
                     : `Your previous response was discarded as degenerate or malformed: ${fault.detail}. Do not repeat it. Reissue only a valid JSON tool call in the provider's declared format. For a report, keep the body under 8 KB: cite log paths and counts; do not paste full logs.`,
               },
             ],
@@ -301,6 +301,17 @@ export class InputRunner {
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });
+  }
+
+  /**
+   * What a report must carry for this member. A settlement is the one kind whose body lives in its
+   * committed file: telling it to send `body` again recreates the 2026-11-13 failure mode.
+   */
+  private reportFields(sessionId: string): string {
+    const member = this.options.store.getTaskSession(sessionId);
+    return member?.expectedKind === 'settlement'
+      ? 'submit summary and checks; the committed .dev/work/<taskId>/<sessionId>/settlement.md is the body, so pass `body` only when that file is missing'
+      : 'submit summary and body (the body is the complete report text)';
   }
 
   /**
@@ -336,7 +347,7 @@ export class InputRunner {
             content: [
               {
                 type: 'text',
-                text: `You ended your response without calling \`agent_report\`. Submit your formal "${member.expectedKind}" report now by calling the agent_report tool with \`summary\` and \`body\`${verdict} based on the work you already completed; do not redo the work.`,
+                text: `You ended your response without calling \`agent_report\`. Submit your formal "${member.expectedKind}" report now by calling the agent_report tool: ${this.reportFields(sessionId)}${verdict}; base it on the work you already completed and do not redo the work.`,
               },
             ],
             display: false,

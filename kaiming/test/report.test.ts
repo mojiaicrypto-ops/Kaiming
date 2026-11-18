@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -236,27 +237,69 @@ describe('agent_report', () => {
     }
   });
 
-  it('registers a settlement body that was already written and committed', async () => {
+  it('takes an existing settlement file as the body without asking for it again', async () => {
     const f = fixture({ type: 'write', roleId: 'settler', expectedKind: 'settlement' });
     const body = '# settlement\n\nall checked\n';
     const path = writeSettlement(f.cwd, f.taskId, body);
+    const digest = createHash('sha256').update(body).digest('hex');
 
-    const result = await f.report.execute('call-1', report({ summary: 'settled', body, settlement: { schemaVersion: 1 } }));
+    // The settler wrote and committed the file first; the arguments carry no body at all.
+    const result = await f.report.execute('call-1', {
+      summary: 'settled',
+      checks: [{ name: 'git status', status: 'passed' }],
+      settlement: { schemaVersion: 1 },
+    });
 
     expect(result.isError).toBe(false);
+    expect(result.details['bodySource']).toBe('disk');
     const row = f.store.getResult(String(result.details['resultId']));
     // The body on disk is the committed one, not a copy at a new path.
-    expect(row?.bodyRef).toMatchObject({ path });
+    expect(row?.bodyRef).toMatchObject({ path, sha256: digest });
     expect(row?.settlement).toEqual({ schemaVersion: 1 });
+    expect(readFileSync(path, 'utf8')).toBe(body);
 
-    // A different body for the same predictable path is refused: nothing would be committed.
-    const mismatch = await f.report.execute(
+    // Even a different parameter body cannot replace it: the disk bytes stay authoritative.
+    const second = await f.report.execute(
       'call-2',
       report({ summary: 'settled again', body: '# different\n', settlement: { schemaVersion: 1 } }),
     );
-    expect(mismatch.details['code']).toBe('VERSION_CONFLICT');
-    expect(f.store.listTaskResults(f.taskId)).toHaveLength(1);
+    expect(second.isError).toBe(false);
+    expect(second.details['bodySource']).toBe('disk');
+    expect(f.store.listTaskResults(f.taskId)).toHaveLength(2);
+    const recorded = f.store.getResult(String(second.details['resultId']));
+    expect(recorded?.bodyRef.sha256).toBe(digest);
     expect(readFileSync(path, 'utf8')).toBe(body);
+  });
+
+  it('still requires a body when the settlement file is missing or empty', async () => {
+    const f = fixture({ type: 'write', roleId: 'settler', expectedKind: 'settlement' });
+
+    // Negative control: no file, no body -> nothing is recorded, and the reason names the fallback.
+    const missing = await f.report.execute('call-1', { summary: 'settled' });
+
+    expect(missing.isError).toBe(true);
+    expect(missing.details['code']).toBe('INVALID_ARGUMENT');
+    expect(missing.content[0]?.text).toContain('no non-empty settlement.md exists on disk yet');
+    expect(f.store.listTaskResults(f.taskId)).toHaveLength(0);
+
+    // An empty file is still no body: the parameter path writes it, and says so.
+    const emptyPath = writeSettlement(f.cwd, f.taskId, '   \n');
+    const viaParam = await f.report.execute('call-2', {
+      summary: 'settled',
+      body: '# settlement\n\nwritten now\n',
+      checks: [{ name: 'git status', status: 'passed' }],
+    });
+    expect(viaParam.isError).toBe(false);
+    expect(viaParam.details['bodySource']).toBe('param');
+    expect(readFileSync(emptyPath, 'utf8')).toBe('# settlement\n\nwritten now\n');
+    expect(f.store.listTaskResults(f.taskId)).toHaveLength(1);
+
+    // Any other kind keeps the ordinary requirement, file or no file.
+    const developer = fixture({ type: 'write' });
+    const noBody = await developer.report.execute('call-1', { summary: 'implemented' });
+    expect(noBody.isError).toBe(true);
+    expect(noBody.details['code']).toBe('INVALID_ARGUMENT');
+    expect(developer.store.listTaskResults(developer.taskId)).toHaveLength(0);
   });
 
   it('keeps a changed settlement manifest apart from the recorded one', async () => {

@@ -14,9 +14,9 @@ task(op=get) verify goal / Plan / delivery / valid results and missing items
   → verify verification and update scope
   → save affected knowledge and authorized records
   → check references, content and delivery consistency
-  → prepare the final project report body
+  → write the report body to the fixed settlement path
   → Git includes the report, or verify the local-save receipt
-  → agent_report(body + structured settlement checklist) save the settlement report
+  → agent_report(summary + structured settlement checklist) — the committed file is the body
 ```
 
 Verify that the delivery is consistent with the verified results and the basis; when there are substantive changes or an unclosed blocker, report the missing items per the shared rules and hand them to the supervisor to arrange checks, and do not use settlement wording to make them pass (D-05, D-08; G3).
@@ -35,7 +35,7 @@ Remove stale statements from the affected body, revise the single source of trut
 
 ## Saving and receipts
 
-When Git is available, verify the working tree, the staging area and the scope, and commit only this round's results and delivery records. This is checked, not assumed: if any file the independent review covered is left uncommitted, the supervisor's task(op=end) is refused and names those files, so finish the commit before reporting settled. Preserve unrelated changes and staged content; do not overwrite, discard or commit them along the way; when they cannot be safely separated or there is a conflict, preserve the scene and report a blocker. Write the report body to the fixed settlement path `.dev/work/<taskId>/<sessionId>/settlement.md` before committing and include it in this save; afterward, submit exactly that body through agent_report (the program refuses a different body at that path) and store the actual commit, file list and summary in the structured receipt, without writing back to the report in a way that causes the next commit. Verify existing commits first and do not commit again (D-07, S6).
+When Git is available, verify the working tree, the staging area and the scope, and commit only this round's results and delivery records. This is checked, not assumed: if any file the independent review covered is left uncommitted, the supervisor's task(op=end) is refused and names those files, so finish the commit before reporting settled. Preserve unrelated changes and staged content; do not overwrite, discard or commit them along the way; when they cannot be safely separated or there is a conflict, preserve the scene and report a blocker. Write the report body to the fixed settlement path `.dev/work/<taskId>/<sessionId>/settlement.md` before committing and include it in this save; afterward, submit `agent_report` with the summary and checks only — the program reads that committed file as the report body, so do not paste it into the arguments and do not rewrite it. A missing or empty file at that path still requires `body`. Store the actual commit, file list and summary in the structured receipt, without writing back to the report in a way that causes the next commit. Verify existing commits first and do not commit again (D-07, S6).
 
 When Git is unavailable, verify the local save and summary of the same project files, report local_saved, and do not initialize Git yourself. A read-only Task only saves the agreed results on the Server, and does not force knowledge rewriting or Git; handle it per the shared rules.
 

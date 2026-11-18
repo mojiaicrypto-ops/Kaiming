@@ -51,6 +51,8 @@
 
 #### P0-2：结算报告（Settler）单写对齐
 
+**状态**：已实施（2026-11-18）。按与用户确认的语义：磁盘文件非空即权威正文（`bodySource: 'disk'`，不报冲突、不改写），缺失/为空才要求参数 `body`（`bodySource: 'param'`）。证据见[验证记录](validation.md#2026-11-18--p0-2-结算单写对齐磁盘正文权威)。
+
 - **问题与根因**：
   - 按 D-07 与 `prompts/settler.md`（第 38 行），Settler 必须先用 `write` 工具把完整报告写入 `.dev/work/<taskId>/<sessionId>/settlement.md` 并执行 `git commit`，随后调用 `agent_report(summary, body, ...)`。
   - `src/tools/report-tools.ts`（第 67、81、156～164 行）目前强制要求 `body` 为必填非空字符串，且当 `kind === 'settlement'` 且磁盘文件已存在时，若 `existing !== body`（哪怕差一个末尾换行或模型在参数里只写了简短说明）就拒绝并报 `VERSION_CONFLICT`。这迫使模型在 JSON 参数里把几千字的 Markdown 逐字再背诵一遍，极易导致 JSON 转义错误、16KB 超限拦截或参数退化（11-13 事故中 Settler 48 连败的直接诱因）。

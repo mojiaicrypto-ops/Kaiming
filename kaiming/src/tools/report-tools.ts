@@ -37,6 +37,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
     description: [
       'Deliver the formal result this step asked you for (its kind is fixed by the dispatch): summary, body, checks.',
       'body is the complete user-visible text; the program stores it and records the delivery state for review/test.',
+      'For a write Task settlement, body may be omitted once .dev/work/<taskId>/<sessionId>/settlement.md is written: that committed file is the report body.',
       'Review and test need a verdict. Use it to report a blocked conclusion that needs the supervisor.',
     ].join('\n'),
     parameters: {
@@ -64,7 +65,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
         },
         settlement: { type: 'object' },
       },
-      required: ['summary', 'body'],
+      required: ['summary'],
       additionalProperties: false,
     },
     async execute(_toolCallId, rawParams) {
@@ -77,9 +78,6 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
       const body = readString(params, 'body');
       if (summary === undefined || summary.trim() === '') {
         return fail('INVALID_ARGUMENT', 'summary must be a non-empty string');
-      }
-      if (body === undefined || body.trim() === '') {
-        return fail('INVALID_ARGUMENT', 'body must be the complete report text (non-empty)');
       }
       const checks = parseChecks(params['checks']);
       if (checks === undefined) {
@@ -111,6 +109,26 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
       if ((kind === 'review' || kind === 'test') && verdictRaw === undefined) {
         return fail('INVALID_ARGUMENT', `a ${kind} report needs a verdict`);
       }
+      // A write Task's settlement is written and committed to its fixed path first (D-07). When that
+      // file already exists, it is the authoritative body: re-sending kilobytes of Markdown through
+      // JSON arguments is what broke the 2026-11-13 settler (escaping, 16KB cap, degeneration). A
+      // missing or empty file keeps the parameter path as the fallback.
+      const settlementPath =
+        kind === 'settlement' && task.type === 'write'
+          ? join(context.cwd, '.dev', 'work', task.id, context.sessionId, 'settlement.md')
+          : undefined;
+      const onDisk = settlementPath === undefined ? undefined : readFileIfPresent(settlementPath);
+      const diskBody = onDisk !== undefined && onDisk.trim() !== '' ? onDisk : undefined;
+      const bodySource: 'disk' | 'param' = diskBody === undefined ? 'param' : 'disk';
+      const effectiveBody = diskBody ?? body;
+      if (effectiveBody === undefined || effectiveBody.trim() === '') {
+        return fail(
+          'INVALID_ARGUMENT',
+          settlementPath !== undefined
+            ? 'body is required because no non-empty settlement.md exists on disk yet; write and commit that file first'
+            : 'body must be the complete report text (non-empty)',
+        );
+      }
 
       // Delivery binding (G3): observed by the program now, never supplied by the model. A test is
       // measured over the very files the last passed review covered, so the two are comparable even
@@ -133,7 +151,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           context.inputId,
           kind,
           digestOfText(summary),
-          `body:${digestOfText(body)}`,
+          `body:${digestOfText(effectiveBody)}`,
           `verdict:${verdictRaw ?? ''}`,
           `checks:${digestOf(checks)}`,
           `basis:${digestOf(readStringArray(params, 'basisRefs') ?? [])}`,
@@ -151,22 +169,12 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
         kind,
         resultId,
       });
-      // A settlement body is committed before it is registered (D-07), so its path is predictable and
-      // the bytes already on disk must be exactly the body being submitted.
-      if (kind === 'settlement') {
-        const existing = readFileIfPresent(target.path);
-        if (existing !== undefined && existing !== body) {
-          return fail(
-            'VERSION_CONFLICT',
-            'a settlement report file already exists with different content; commit the body you submit',
-            { path: target.path },
-          );
-        }
-      }
-      const bodyRef: ArtifactRef = reportRefFor(target, body);
+      // The disk file is never rewritten here: either it already is the body (a settlement read from
+      // its committed path), or no file existed and the parameter body is written now.
+      const bodyRef: ArtifactRef = reportRefFor(target, effectiveBody);
       try {
-        if (readFileIfPresent(target.path) !== body) {
-          writeReportBody(target, body);
+        if (readFileIfPresent(target.path) !== effectiveBody) {
+          writeReportBody(target, effectiveBody);
         }
       } catch (error) {
         return fail('STORAGE_UNAVAILABLE', `the report body could not be saved: ${messageOf(error)}`, {
@@ -201,6 +209,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           kind: recorded.kind,
           verdict: recorded.verdict,
           reportRef: recorded.bodyRef,
+          bodySource,
           ...(recorded.deliveryState !== null
             ? { delivery: { digest: recorded.deliveryState.digest, files: recorded.deliveryState.paths.length } }
             : {}),
@@ -216,6 +225,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
               kind: existing.kind,
               verdict: existing.verdict,
               reportRef: existing.bodyRef,
+              bodySource,
             });
           }
         }

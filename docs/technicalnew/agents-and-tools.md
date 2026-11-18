@@ -78,11 +78,11 @@ write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`
 
 每项 checks 为 name/status（passed/failed/blocked/not_run）/command?/exitCode?/reason?/evidenceRefs。真正执行才 passed，真实失败保留 failed，未覆盖说明原因/风险/用户决定。需要主管决策时提交 expectedKind 的正式 blocked 报告并结束当前输入；普通用户问答使用 question。
 
-body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write Task 内的 investigation/recovery 只读报告写 Server，其余 write 报告写项目 `.dev/work/<taskId>/<sessionId>/`；提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。唯一例外是结算报告：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07），再以相同 body 提交报告；程序发现已有文件内容不同则拒绝，不会改写已提交正文。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
+body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write Task 内的 investigation/recovery 只读报告写 Server，其余 write 报告写项目 `.dev/work/<taskId>/<sessionId>/`；提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。结算报告是唯一例外：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07）；**文件已存在且非空时它就是权威正文**——`agent_report` 的 `body` 可以省略（传了也不生效，磁盘字节不被改写），结果带 `bodySource: 'disk'` 便于排查；文件缺失或为空时才要求非空 `body` 并写入（`bodySource: 'param'`）。这样结算不必把数千字 Markdown 重新塞进 JSON 参数（11-13 事故的诱因）。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
 
 The host checks the formal report against the input that is ending. A member whose input settles without a result for its `expectedKind` is recorded as `failed` / `REPORT_MISSING`, not `completed`; `task.get`, dispatch member state and the Task detail expose that fact, and completion refuses it. The supervisor should continue that same Session with a report-only instruction (same phase) instead of dispatching a replacement review; the missing report is never treated as a pass.
 
-正常结束却没有报告时，宿主先发一次隐藏补交提醒（`display=false`，不进浏览器转录），让成员就已完成的工作补交正式报告；补交成功该输入以 `completed` 落盘。仍无报告才记 `REPORT_MISSING`——补交只有一次，不会循环，也不会把无报告当成通过。
+正常结束却没有报告时，宿主先发一次隐藏补交提醒（`display=false`，不进浏览器转录），让成员就已完成的工作补交正式报告；补交成功该输入以 `completed` 落盘。结算成员的提醒直接指向已提交的 `settlement.md` 作为正文（仅在文件缺失时才要求 `body`），不再要求把 Markdown 重传。仍无报告才记 `REPORT_MISSING`——补交只有一次，不会循环，也不会把无报告当成通过。
 
 Review/Test checks are evidence only when actually run. A negative control is recorded `passed` only when its command ran, the known-bad sample was rejected for the expected reason, and `reason` states the bad sample, expected rejection reason, observed rejection and oracle source; `evidenceRefs` carries the acceptance/invariant reference. An unexpected failure stays `failed`. A checker/auditor must self-test with a known-bad sample. A suite with only positive cases, or with expected values copied from current output, is incomplete; the Reviewer reports that as blocking rather than trusting an all-green count. The program records the checks and their status but does not infer oracle quality from their names; that judgment stays with Review/Test and the supervisor (D-05).
 
