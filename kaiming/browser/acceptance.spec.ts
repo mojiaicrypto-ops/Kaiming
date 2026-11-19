@@ -1973,6 +1973,8 @@ test('a conversation is renamed from the rail, and the name survives a reload', 
     const row = page.locator('[data-testid="session-row"]').first();
     await expect(row).toContainText(/New session|新会话/);
 
+    // Row actions reserve no width until the row is pointed at (see the rail CSS).
+    await page.locator('.srow').filter({ has: row }).hover();
     await page.locator('[data-testid="session-rename"]').first().click();
     await page.locator('[data-testid="session-rename-input"]').fill('重构文档');
     await page.locator('[data-testid="session-rename-input"]').press('Enter');
@@ -1983,6 +1985,7 @@ test('a conversation is renamed from the rail, and the name survives a reload', 
     await expect(page.locator('[data-testid="session-row"]').first()).toContainText('重构文档', { timeout: 10_000 });
 
     // Clearing it returns the row to the default name instead of leaving it blank.
+    await page.locator('.srow').filter({ has: page.locator('[data-testid="session-row"]').first() }).hover();
     await page.locator('[data-testid="session-rename"]').first().click();
     await page.locator('[data-testid="session-rename-input"]').fill('');
     await page.locator('[data-testid="session-rename-input"]').press('Enter');
@@ -2072,8 +2075,9 @@ test('a settled session can be cleaned up from the rail, and a busy one says why
     await expect(page.locator('.srow[aria-current], .srow:has([aria-current="true"]) [data-testid="session-cleanup"]')).toHaveCount(0);
 
     // Remove the settled one: two clicks, then it is gone from the rail.
-    const settled = page.locator('[data-testid="session-row"]', { hasText: 'New session' }).first();
-    const row = page.locator('.srow', { has: settled });
+    // Only the non-open rows offer cleanup, so the first of those is the settled one.
+    const row = page.locator('.srow').filter({ has: page.locator('[data-testid="session-cleanup"]') }).first();
+    await row.hover();
     await row.locator('[data-testid="session-cleanup"]').click();
     await row.locator('[data-testid="session-cleanup"]').click();
     await expect(page.locator('.toast')).toContainText(/removed|已清理/i, { timeout: 10_000 });
@@ -2082,6 +2086,7 @@ test('a settled session can be cleaned up from the rail, and a busy one says why
     // The queued one is refused, with the reason the server gave.
     const busyRow = page.locator('.srow').filter({ has: page.locator('[data-testid="session-row"]') }).last();
     const before = await page.locator('[data-testid="session-row"]').count();
+    await busyRow.hover();
     await busyRow.locator('[data-testid="session-cleanup"]').click();
     await busyRow.locator('[data-testid="session-cleanup"]').click();
     // The earlier confirmation is still on screen, so the refusal is read from the error toast.
@@ -2116,6 +2121,7 @@ test('a conversation can be archived out of the rail and restored', async ({ pag
     await expect(page.locator('[data-testid="session-row"]')).toHaveCount(2, { timeout: 10_000 });
 
     const row = page.locator('.srow').filter({ has: page.locator('[data-testid="session-archive"]') }).first();
+    await row.hover();
     await row.locator('[data-testid="session-archive"]').click();
     await expect(page.locator('.toast')).toContainText(/archived|已归档/i, { timeout: 10_000 });
     await expect(page.locator('[data-testid="session-row"]')).toHaveCount(1);

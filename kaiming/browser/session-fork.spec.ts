@@ -30,7 +30,9 @@ test('forks the open conversation and selects the copy', async ({ page }) => {
 
     const rows = page.locator('[data-testid="session-row"]');
     await expect(rows).toHaveCount(1);
-    await page.locator('[data-testid="session-fork"]').first().click();
+    const sourceRow = page.locator('.srow').filter({ has: rows.first() });
+    await sourceRow.hover();
+    await sourceRow.locator('[data-testid="session-fork"]').click();
 
     // The rail now holds the source and the copy, and the copy is the open conversation.
     await expect(rows).toHaveCount(2, { timeout: 15_000 });
@@ -43,11 +45,9 @@ test('forks the open conversation and selects the copy', async ({ page }) => {
     // A refusal surfaces the server reason: a fresh session has no history to copy.
     await page.locator('[data-testid="new-session"]').click();
     await expect(rows).toHaveCount(3, { timeout: 15_000 });
-    await page
-      .locator('.srow')
-      .filter({ hasText: 'New session' })
-      .locator('[data-testid="session-fork"]')
-      .click();
+    const freshRow = page.locator('.srow').filter({ hasText: 'New session' });
+    await freshRow.hover();
+    await freshRow.locator('[data-testid="session-fork"]').click();
     await expect(page.locator('.toast.err')).toContainText('Not forked', { timeout: 15_000 });
   } finally {
     await harness.close();

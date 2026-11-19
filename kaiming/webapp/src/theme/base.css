@@ -3218,7 +3218,8 @@ details > summary {
 }
 /* .entry is shared by the tree, the report list and the knowledge rows; nothing here is
    drawer-specific any more. */
-/* A rail row with one trailing action: the row selects, the small button removes. */
+/* A rail row: the row selects, its actions stay out of the title's width until the row is pointed
+   at or keyboard-focused. Touch has no hover, so there they stay inline. */
 .srow {
   display: flex;
   align-items: center;
@@ -3245,6 +3246,37 @@ details > summary {
 .srow.armed .sx {
   color: var(--error);
   border-color: var(--error);
+}
+
+.sx-group {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 0;
+  overflow: hidden;
+}
+.srow:hover .sx-group,
+.srow:has(:focus-visible) .sx-group,
+.srow.armed .sx-group {
+  max-width: 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sx-group {
+    transition: max-width 120ms ease;
+  }
+}
+@media (hover: none) {
+  .sx-group {
+    max-width: none;
+    overflow: visible;
+  }
+}
+
+/* The group clips at rest, so its buttons cannot paint the shared 2px-offset outline; an inset
+   ring stays inside the clipped box and keeps the keyboard cue at the accent contrast. */
+.srow .sx:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .entry {

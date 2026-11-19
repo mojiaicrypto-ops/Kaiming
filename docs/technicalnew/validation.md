@@ -164,3 +164,10 @@
 - **实现**：`plan-contract` 解析独占一行的 `verification profile`（值后可带说明；围栏按 CommonMark 字符/长度配对，4 空格缩进视为代码）；implement Task 派发 developer/tester 时信封注入档位、该档允许范围和“派发不得加码”；无声明按 focused。chief v10、settler v3、developer v6、tester v5 与 BL-02/BL-13、D-04/D-07、G2/G4/G5、AC-23、S6、README、journeys 同步；`guidance.ts` 的 settle 指引不再要求 `backlog(op=add)` 记 leftover；backlog 工具描述补规格引用格式与 add 范围。无 schema、无新 op、无宿主命令文本审查。
 - **证据**：`plan-contract 12/12`、`delegation 27/27`（含声明/无声明注入、reviewer/design/document 负向对照）、`guidance 1/1`；全量 68 文件 690/690；`tsc`；`check:prompts` 15/15。独立 Review 首轮 NEEDS_FIX（settle 指引与四处文档仍要求把 leftover 记为待办），修正后复核；独立 Test 首轮 passed 并给出围栏配对/缩进代码的 false positive，修正后重测。提示词按进程缓存，重启后生效。
 - **边界**：不阻止主管在派发文字里写全量命令（宿主不做自然语言审查）；不做 backlog 存储层的特判；`add` 仍支持设计切片与用户明确要求。
+
+### 2026-11-19 · 会话列行内动作收纳
+
+- **问题**：240px 会话列每行常驻最多 4 个动作（改名/分支/归档/清理），约 110px 被按钮占走，标题与日期在剩余宽度里截断；用户截图指出“按钮占据位置太长”。
+- **实现**：动作包进 `.sx-group`，静止 `max-width: 0; overflow: hidden`，行悬停、键盘 `:has(:focus-visible)` 或清理确认态展开到行宽（`max-width: 100%`），`hover: none` 触屏常驻；按钮的键盘焦点改为内嵌 accent 环，避免被组裁剪。行为、testid、事件与当前会话排除不变；浏览器用例在点击动作前先悬停所在行。
+- **证据**：真实 Chromium 四个受影响的用例通过（改名、清理含忙会话拒绝、归档/恢复、分支）；静止组宽 0、悬停 111.31px 无裁剪；确认态 161.89px（内容 162px，亚像素差），按钮右边 = 行右边 227 < 列右边 240；`hover: none` 下计算值 `max-width: none`；`webapp` typecheck/build 通过。独立 Review 首轮 NEEDS_FIX（确认文字被 148px 上限裁剪、焦点环被 `overflow: hidden` 裁掉），修正后复核。
+- **边界**：未加菜单/弹层状态；悬停展开期间标题临时截断是取舍；触屏移动端形态仍按缺口登记 M1–M5 重做。

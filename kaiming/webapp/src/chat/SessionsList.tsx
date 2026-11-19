@@ -141,68 +141,70 @@ export function SessionsList({
                 <span className="f3 sess-time">{dayLabel(row.updatedAt, t)}</span>
               </button>
             )}
-            <button
-              type="button"
-              className="sx"
-              aria-label={t('session.rename')}
-              title={`${t('session.rename')} — ${t('session.renameHint')}`}
-              data-testid="session-rename"
-              onClick={() => {
-                setArmed(null);
-                setNameDraft(row.title ?? '');
-                setRenaming({ sessionId: row.sessionId, revision: row.revision });
-              }}
-            >
-              ✎
-            </button>
-            <button
-              type="button"
-              className="sx"
-              aria-label={t('session.fork')}
-              title={`${t('session.fork')} — ${t('session.forkHint')}`}
-              data-testid="session-fork"
-              onClick={() => {
-                setArmed(null);
-                onFork(row.sessionId);
-              }}
-            >
-              ⎇
-            </button>
-            {row.sessionId !== current && (
+            <span className="sx-group">
               <button
                 type="button"
                 className="sx"
-                aria-label={t('session.archive')}
-                title={t('session.archive')}
-                data-testid="session-archive"
-                onClick={() => void onArchive(row.sessionId, row.revision, true)}
-              >
-                ⌄
-              </button>
-            )}
-            {/* The open session is not offered: deleting what is on screen would leave the shell
-                pointing at nothing, and the reader is already there to decide. */}
-            {row.sessionId !== current && (
-              <button
-                type="button"
-                className="sx"
-                aria-label={t('session.cleanup')}
-                title={t('session.cleanup')}
-                data-testid="session-cleanup"
+                aria-label={t('session.rename')}
+                title={`${t('session.rename')} — ${t('session.renameHint')}`}
+                data-testid="session-rename"
                 onClick={() => {
-                  if (armed !== row.sessionId) {
-                    setArmed(row.sessionId);
-                    return;
-                  }
                   setArmed(null);
-                  void onCleanup(row.sessionId, row.revision).then((removed) => {
-                    if (removed) onSelect(current);
-                  });
+                  setNameDraft(row.title ?? '');
+                  setRenaming({ sessionId: row.sessionId, revision: row.revision });
                 }}
               >
-                {armed === row.sessionId ? t('session.cleanupConfirm') : '×'}
+                ✎
               </button>
-            )}
+              <button
+                type="button"
+                className="sx"
+                aria-label={t('session.fork')}
+                title={`${t('session.fork')} — ${t('session.forkHint')}`}
+                data-testid="session-fork"
+                onClick={() => {
+                  setArmed(null);
+                  onFork(row.sessionId);
+                }}
+              >
+                ⎇
+              </button>
+              {row.sessionId !== current && (
+                <button
+                  type="button"
+                  className="sx"
+                  aria-label={t('session.archive')}
+                  title={t('session.archive')}
+                  data-testid="session-archive"
+                  onClick={() => void onArchive(row.sessionId, row.revision, true)}
+                >
+                  ⌄
+                </button>
+              )}
+              {/* The open session is not offered: deleting what is on screen would leave the shell
+                  pointing at nothing, and the reader is already there to decide. */}
+              {row.sessionId !== current && (
+                <button
+                  type="button"
+                  className="sx"
+                  aria-label={t('session.cleanup')}
+                  title={t('session.cleanup')}
+                  data-testid="session-cleanup"
+                  onClick={() => {
+                    if (armed !== row.sessionId) {
+                      setArmed(row.sessionId);
+                      return;
+                    }
+                    setArmed(null);
+                    void onCleanup(row.sessionId, row.revision).then((removed) => {
+                      if (removed) onSelect(current);
+                    });
+                  }}
+                >
+                  {armed === row.sessionId ? t('session.cleanupConfirm') : '×'}
+                </button>
+              )}
+            </span>
           </div>
         );
       })}
