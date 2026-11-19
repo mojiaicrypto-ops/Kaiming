@@ -149,6 +149,8 @@ export function createBacklogTool(contextOf: BacklogToolContextResolver): Domain
       'Work with the project backlog file `.dev/backlog.md`: list/get entries, add one, close one (note required), or edit its原文 by exact replacement.',
       '`add` and `close` allocate ids and record source/actor/time; a designer or settler `add` inside a Task also records that Task as the producer. `edit` is an exact-text replacement: it does not refresh `- 更新:` and does not bind the current Task, so new design slices use `add` with specRefs, and refining an existing item means writing `- 规格:` (and `- Task:` when it is a slice of this Task) into the edited text.',
       'A backlog item with a format problem cannot be added to, closed or edited through the entry operations; fix its原文 with edit first.',
+      'Spec references are project-relative file paths, optionally with #heading (e.g. `docs/06-页面规格.md#8`); a section number alone is not a reference.',
+      '`add` records work the user explicitly asked for, a confirmed scope split or in-scope leftover, or a design slice; an incidental finding from development, review or test belongs in the report body, not in the backlog.',
     ].join(' '),
     parameters: {
       type: 'object',

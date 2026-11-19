@@ -64,7 +64,7 @@ write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`
 
 **dispatch**：只组织当前步骤。有 sessions 即派发：每项 roleId 与 sessionId 恰有一个——roleId 新建专业 Session，sessionId 对已停稳成员追加剩余工作；**instructions 只有一个位置**。新建成员省略 label/expectedKind 时由宿主按 roleId 取值（不给模型增加必填项）。不带 sessions 表示仅等待当前步骤。整批接纳原子，不出现半批。
 
-派发时宿主把**信封**写进该输入的 Pi payload，而不是 `instructions` 列：Task 身份（type/workKind/phase/role/expectedKind）、目标、新建成员的计划路径与验收摘要（上限 1500 字符）、当前范围核对、分配的 writeScope 与引用、Review/Test/Settle 阶段的最新上游报告（kind/resultId/verdict/body 路径），以及固定的 `agent_report` 收尾契约（review/test 必须带 verdict）。`task_sessions.instructions` 仍只存主管原话，成员抽屉与任务详情不被宿主事实刷屏；续办沿用同一信封。这样成员不必先花回合 `task(op=get)` / 读 Plan 才能开工。
+派发时宿主把**信封**写进该输入的 Pi payload，而不是 `instructions` 列：Task 身份（type/workKind/phase/role/expectedKind）、目标、新建成员的计划路径与验收摘要（上限 1500 字符）、当前范围核对、implement Task 派发给 developer/tester 时的验证档与上限、分配的 writeScope 与引用、Review/Test/Settle 阶段的最新上游报告（kind/resultId/verdict/body 路径），以及固定的 `agent_report` 收尾契约（review/test 必须带 verdict）。`task_sessions.instructions` 仍只存主管原话，成员抽屉与任务详情不被宿主事实刷屏；续办沿用同一信封。这样成员不必先花回合 `task(op=get)` / 读 Plan 才能开工。
 
 并行规则（BL-07/D-01）：只读工作可任意并行；写工作允许同一 Task 内按模块并行，每个写成员必须声明 writeScope（项目相对路径或 glob）。程序只核对范围**重叠**并告警，不拦截——是否可并行、如何分工由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本，不在本版。
 
@@ -107,6 +107,8 @@ Review/Test checks are evidence only when actually run. A negative control is re
 - **程序填写来源与操作者**：来源是 `<roleId> <sessionId> / <inputId>`，操作者取当前输入的 actorId；designer/settler 的 add 自动把当前 Task 写入 `Task`，settler 的 close 在关联当前 Task 时默认填 taskIds；chief/界面新增不自动关联 Task。
 - **不提供删除**：edit 可以删掉原文，但提示词要求以关闭代替删除；被删条目若仍被 Task 关联，出现“关联的待办不存在”的待核对提示。
 - **返回即重新解析**：add/close/edit 都在项目锁内读回，写入后立刻能看出是否写坏；失败时附 BF-2 的格式摘要和相关问题行号。
+- **规格引用**：项目相对文件路径，可带 `#标题`（如 `docs/06-页面规格.md#8`）；`06 §8` 这类章节号不是引用，解析不到会出现在 warnings，不当成格式问题、也不影响其他条目。
+- **新增范围**：`add` 只用于用户明确要求的工作、本次范围内确认继续的遗留/拆分，以及设计切片；开发、评审或测试中的顺手发现写进报告，不建待办。结算默认只 `close` 已交付项。
 - **只读 Task**：backlog 列入 `PROJECT_WRITING_DOMAIN_TOOLS`（取代 requirement），只读 Task 中整个工具不挂载，需要查看时用普通读取。
 
 ### question
@@ -179,7 +181,7 @@ chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
 
 正文提取边界固定：base 从第一个 `## Base rules` 到文件末尾（含 `## Judgment and expression`）；specialists 从 `## Shared rules` 到 `## Role file map` 之前；chief 与各专业角色从 `## Role and goal` 到文件末尾。保留正文内的各节，不只取第一个小节；文档标题/状态说明与角色映射表不进入模型。
 
-base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.dev/INDEX.md`、`.dev/product/`、`.dev/technical/`、`.dev/backlog.md`、`.dev/work/<taskId>/`），不依赖某个专业角色正文；chief 正文写明设计完成门禁只读 `.dev/product/` 与 `.dev/technical/`（初始化的入口文件由结算保存，不进入门禁）。design Task 派发给 designer 时，宿主信封追加同一条事实与切片写入通道（新切片用 `add`，`edit` 是纯文本替换）。
+base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.dev/INDEX.md`、`.dev/product/`、`.dev/technical/`、`.dev/backlog.md`、`.dev/work/<taskId>/`），不依赖某个专业角色正文；chief 正文写明设计完成门禁只读 `.dev/product/` 与 `.dev/technical/`（初始化的入口文件由结算保存，不进入门禁）。design Task 派发给 designer 时，宿主信封追加同一条事实与切片写入通道（新切片用 `add`，`edit` 是纯文本替换）。implement Task 派发给 developer/tester 时，宿主从 Plan 读取独占一行的 `verification profile: visual|focused|broad` 声明（值后可带说明），信封追加该档与“派发不得加码、冲突要报告”；没有声明时写明按 focused 处理。宿主只注入事实，不解析派发命令。
 
 **语言**：注入模型的系统级文本（九份角色提示词正文、项目入口 AGENTS.md、工具描述与 schema、宿主生成的指令与通知）默认使用英文；模型对用户的自然语言回复跟随用户输入语言。检查入口：`kaiming/checks/prompt-language.ts`（按上述边界抽取并断言无中日韩字符、边界可解析、角色正文齐全）。
 
@@ -205,4 +207,4 @@ base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.
 
 ## G5 模型行为检查
 
-覆盖主管自由讨论不建 Task、专业调查绑定 read Task、主管总体 Plan、验收必填与越界提示、显式阶段更新、按步委派、当前步骤全部成员聚合、超时不取消、原生交互期间父委派保持等待/宿主直接答复、正式 blocked 报告后原 Session 接续、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。统一设计角色还须检查待办转化、模块内聚、切片可独立验收、已有技术依据复用、总图/子图/契约一致、待办只经 backlog 工具写入（不用 bash 改写或调用不存在的操作），以及无设计聊天的独立实施。补充验证整体判断与有依据的质疑、授权内自主推进、最小上下文分工、文档独立可实施、成熟实现按需采用和结算后入口可接续；具体场景唯一列在 [I4](implementation-checks.md#i4-提示词与真实业务检查)。提示词文字存在不证明模型实际遵守。
+覆盖主管自由讨论不建 Task、专业调查绑定 read Task、主管总体 Plan、验收必填与越界提示、显式阶段更新、按步委派、当前步骤全部成员聚合、超时不取消、原生交互期间父委派保持等待/宿主直接答复、正式 blocked 报告后原 Session 接续、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。统一设计角色还须检查待办转化、模块内聚、切片可独立验收、已有技术依据复用、总图/子图/契约一致、待办只经 backlog 工具写入（不用 bash 改写或调用不存在的操作），以及无设计聊天的独立实施。补充验证验证档上限与冲突报告（Plan 声明 focused 而验证配置/派发要求全量时，成员按档执行并报告）、implement 派发信封包含声明档位、结算不把顺手发现记为待办。补充验证整体判断与有依据的质疑、授权内自主推进、最小上下文分工、文档独立可实施、成熟实现按需采用和结算后入口可接续；具体场景唯一列在 [I4](implementation-checks.md#i4-提示词与真实业务检查)。提示词文字存在不证明模型实际遵守。

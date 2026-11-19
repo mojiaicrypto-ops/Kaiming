@@ -145,7 +145,7 @@ Pi 原生 read/grep/find/ls/edit/write/bash、工具循环、重试、压缩及�
 Plan：稳定 taskId + file_saves → 原子保存 Plan → DB Task/planRef/currentTaskId/回执
 报告：稳定 resultId → body 原子保存
     → DB result/回执 → 唤醒当前步骤等待
-结算：Agent 核对成果/验证 → 更新受影响规格的实现状态与导航、关闭已完成的待办并写明 Task、遗留记为待办
+结算：Agent 核对成果/验证 → 更新受影响规格的实现状态与导航、关闭已完成的待办并写明 Task、本次范围内需要继续的遗留记为待办（顺手发现写进结算报告）
     → 准备结算报告 → Git 提交本次成果及报告；或本机保存并核对
     → agent_report(summary + 实际保存回执)；已写入的 settlement.md 即正文，不重写已保存报告
     → chief task(op=end)：先由宿主观察复核覆盖路径的提交状态（`runtime/git-delivery.ts`），

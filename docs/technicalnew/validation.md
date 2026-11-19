@@ -156,3 +156,11 @@
 - **实现**：`tool-sets` chief = read/grep/find/ls/inspect（其他角色 denied inspect，paused/read 仍保留它）；`inspect` 以 `execFile` 执行固定 argv，只允许 status/log/diff/show/rev-parse，禁 ext-diff/textconv/fsmonitor 与可选锁，模型不能传 flag；结算提交归 settler。`deliverable.newReviewableDeliveryPaths` 在 `store.completionBlockers` 中检查当前交付路径减去 Review 路径（排除 baseline、按 Task 类型过滤、候选才查 gitignore），无 Git 同样生效。chief v9 增加免打扰语义。
 - **证据**：`test/inspect-tool.test.ts` 6/6（固定 argv、bad rev/path、真实仓库只读：status/HEAD 前后不变、非仓库报错、仓库配置的 external diff/textconv/fsmonitor helper 不执行）；`inspect-tool + tool-sets + report + runtime + deletion-gate-runtime` focused 107/107；全量 67 文件 683/683；`tsc`；`check:prompts` 15/15。独立 Test 用 7 条变异（加回 chief bash、放开 bad rev、去掉 fsmonitor 抑制、清空新文件检查、去掉 baseline 排除、去掉 ignored 过滤、把 docs 当代码交付）逐一确认对应用例按预期变红。Review 后新增代码文件、设计产物、无 Git 项目均被报告，settlement 文档、ignored 构建产物、未变的 inherited 文件不误报（`report.test.ts` 5 例）。提示词按进程缓存，重启 workbench 后才生效。
 - **边界**：不引入跨回合写入账本；未回填已有脏工作区的历史；`inspect` 不是沙箱，只保证“主管没有写能力”；删除、测试运行、提交由保留 bash 的专业角色承担。
+
+### 2026-11-19 · P0-5 交付收敛：结算遗留、验证档上限与信封注入
+
+- **问题**：结算条款要求把 leftover 写成 `backlog(op=add)`，与“用户明确要求才记待办”冲突；aisuangua 的 t-ec18b49b852e 据此把测试超时、历史页视觉偏差、刚登记为“不做视觉回归”的页面和一行文档缺漏记成 B-1～B-4。同一 Task 的 Plan 头部写 `focused`，验证配置和派发却要求全量单测与全站视觉，成员照做后扫出无关脏文件；用户说“全部补做”时又把上一轮无关未提交文件并进同一个 Task。
+- **决定**：用户 2026-11-19 要求不再切分，按一个 Plan 全部落地。结算遗留语义收窄到“本次范围内未完成、需要继续”；验证档是上限，Plan 的验证配置和派发不得为 visual/focused 加全量；一个 Task 一个目标；交付完成后不提议立刻开新 Task。
+- **实现**：`plan-contract` 解析独占一行的 `verification profile`（值后可带说明；围栏按 CommonMark 字符/长度配对，4 空格缩进视为代码）；implement Task 派发 developer/tester 时信封注入档位、该档允许范围和“派发不得加码”；无声明按 focused。chief v10、settler v3、developer v6、tester v5 与 BL-02/BL-13、D-04/D-07、G2/G4/G5、AC-23、S6、README、journeys 同步；`guidance.ts` 的 settle 指引不再要求 `backlog(op=add)` 记 leftover；backlog 工具描述补规格引用格式与 add 范围。无 schema、无新 op、无宿主命令文本审查。
+- **证据**：`plan-contract 12/12`、`delegation 27/27`（含声明/无声明注入、reviewer/design/document 负向对照）、`guidance 1/1`；全量 68 文件 690/690；`tsc`；`check:prompts` 15/15。独立 Review 首轮 NEEDS_FIX（settle 指引与四处文档仍要求把 leftover 记为待办），修正后复核；独立 Test 首轮 passed 并给出围栏配对/缩进代码的 false positive，修正后重测。提示词按进程缓存，重启后生效。
+- **边界**：不阻止主管在派发文字里写全量命令（宿主不做自然语言审查）；不做 backlog 存储层的特判；`add` 仍支持设计切片与用户明确要求。

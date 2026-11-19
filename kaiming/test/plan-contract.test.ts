@@ -3,6 +3,7 @@ import {
   acceptanceChanged,
   acceptanceGap,
   acceptanceText,
+  declaredVerificationProfile,
   extractScope,
   scopeDrift,
   scopeCheckFor,
@@ -72,5 +73,54 @@ describe('scope', () => {
       declared: ['server/account/**', 'web/src/account/**'],
       outOfScope: [],
     });
+  });
+});
+
+describe('verification profile', () => {
+  it('reads the one declared line, accepting either colon and optional backticks', () => {
+    expect(declaredVerificationProfile('# Plan\n\nverification profile: `focused`\n')).toBe('focused');
+    expect(declaredVerificationProfile('verification profile：broad')).toBe('broad');
+    expect(declaredVerificationProfile('  Verification Profile: VISUAL  ')).toBe('visual');
+    expect(
+      declaredVerificationProfile('verification profile: `broad` (shared dispatch contract; full suite allowed)'),
+    ).toBe('broad');
+  });
+
+  it('ignores examples inside fenced code and prose that only mentions the phrase', () => {
+    const plan = [
+      '## 验证',
+      '```',
+      'verification profile: broad',
+      '```',
+      '~~~',
+      'verification profile: focused',
+      '~~~',
+      '````',
+      '```',
+      'verification profile: visual',
+      '```',
+      '````',
+      '~~~',
+      '```',
+      'verification profile: focused',
+      '```',
+      '~~~',
+      '    verification profile: broad',
+      'The Plan mentions verification profile: broad in a sentence.',
+      '## other',
+    ].join('\n');
+    expect(declaredVerificationProfile(plan)).toBeUndefined();
+  });
+
+  it('keeps a fence open when the closer is shorter or carries text, and reads a declaration after it', () => {
+    const unclosed = ['```', '``` note', 'verification profile: broad', '## still code'].join('\n');
+    expect(declaredVerificationProfile(unclosed)).toBeUndefined();
+    expect(declaredVerificationProfile('```\nx\n```\nverification profile: focused\n')).toBe('focused');
+  });
+
+  it('returns undefined when nothing is declared or the value is unknown', () => {
+    expect(declaredVerificationProfile('# Plan\n')).toBeUndefined();
+    expect(declaredVerificationProfile('verification profile: exhaustive\n')).toBeUndefined();
+    expect(declaredVerificationProfile('verification profile: broader\n')).toBeUndefined();
   });
 });

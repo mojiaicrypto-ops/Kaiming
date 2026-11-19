@@ -13,7 +13,7 @@ import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, typ
 import { ROLE_PHASE, dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
 import { readPlan } from '../runtime/plan-store.ts';
-import { acceptanceText, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
+import { acceptanceText, declaredVerificationProfile, scopeCheckFor, scopeCheckText, type VerificationProfile } from '../runtime/plan-contract.ts';
 
 const ACCEPTANCE_LIMIT = 1_500;
 
@@ -22,8 +22,28 @@ export interface DispatchEnvelopeFacts {
   readonly planPath?: string;
   readonly acceptance?: string;
   readonly scopeLine?: string;
+  /** The Plan's declared profile, null when it declares none, absent when not evaluated. */
+  readonly verificationProfile?: VerificationProfile | null;
   /** Latest implementation/review/test reports of this Task, newest last. */
   readonly upstream: readonly ResultRow[];
+}
+
+const PROFILE_LIMITS: Record<VerificationProfile, string> = {
+  visual: 'type/build plus one applicable visual check; no suite and no Test stage',
+  focused: 'run only the focused checks for this change; no full suite and no full E2E',
+  broad: 'the broader suite or cross-module E2E is allowed with the reason recorded',
+};
+
+function profileLine(profile: VerificationProfile | null, roleId: string): string {
+  const head =
+    profile === null
+      ? 'Verification profile: none declared in the Plan; treat it as focused'
+      : `Verification profile (from the Plan): ${profile}`;
+  const body =
+    (profile ?? 'focused') === 'focused' && roleId === 'tester'
+      ? 'verify only this acceptance and related regression; no full suite and no cross-module E2E'
+      : PROFILE_LIMITS[profile ?? 'focused'];
+  return `${head} — ${body}. A Plan verification section or dispatch that asks for more does not widen it; report the conflict.`;
 }
 
 /**
@@ -65,6 +85,14 @@ export function buildDispatchEnvelope(
   if (facts.scopeLine !== undefined) lines.push(facts.scopeLine);
   if (member.writeScope.length > 0) lines.push(`Assigned writeScope: ${member.writeScope.join(', ')}`);
   if (member.refs.length > 0) lines.push(`Cited refs: ${member.refs.join(', ')}`);
+
+  if (
+    facts.verificationProfile !== undefined &&
+    task.workKind === 'implement' &&
+    (member.roleId === 'developer' || member.roleId === 'tester')
+  ) {
+    lines.push(profileLine(facts.verificationProfile, member.roleId));
+  }
   if (facts.upstream.length > 0) {
     lines.push('Upstream results:');
     for (const result of facts.upstream) {
@@ -93,6 +121,9 @@ function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelop
     ...(planText !== undefined ? { acceptance: acceptanceText(planText) } : {}),
     ...(planText !== undefined
       ? { scopeLine: scopeCheckText(scopeCheckFor(context.cwd, planText, task.dirtyBaseline)) }
+      : {}),
+    ...(task.workKind === 'implement' && planText !== undefined
+      ? { verificationProfile: declaredVerificationProfile(planText) ?? null }
       : {}),
     upstream,
   };

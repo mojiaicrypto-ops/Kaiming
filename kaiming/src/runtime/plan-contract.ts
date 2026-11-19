@@ -82,6 +82,42 @@ export function acceptanceChanged(before: string, after: string): boolean {
   return acceptanceText(before) !== acceptanceText(after);
 }
 
+export type VerificationProfile = 'visual' | 'focused' | 'broad';
+
+const PROFILE_LINE = /^\s*verification\s+profile\s*[：:]\s*`?(visual|focused|broad)`?\b/i;
+const FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const INDENTED_CODE = /^(?: {4,}|\t)/;
+
+/**
+ * The profile the Plan declares on its own line; undefined when it declares none. CommonMark
+ * fences are tracked by character and length, and a four-space indent is code, not a declaration.
+ * HTML comment blocks are not part of the Plan format.
+ */
+export function declaredVerificationProfile(markdown: string): VerificationProfile | undefined {
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  for (const line of markdown.split(/\r?\n/)) {
+    const fenceMatch = FENCE.exec(line);
+    if (fenceMatch !== null) {
+      const marker = fenceMatch[2] ?? '';
+      const char = marker[0] ?? '`';
+      if (fence === null) {
+        fence = { char, length: marker.length };
+      } else if (char === fence.char && marker.length >= fence.length && (fenceMatch[3] ?? '').trim() === '') {
+        fence = null;
+      }
+      continue;
+    }
+    if (fence !== null || INDENTED_CODE.test(line)) {
+      continue;
+    }
+    const match = PROFILE_LINE.exec(line);
+    if (match?.[1] !== undefined) {
+      return match[1].toLowerCase() as VerificationProfile;
+    }
+  }
+  return undefined;
+}
+
 const BACKTICK = /`([^`]+)`/g;
 /** A path or glob, not a route, command or sentence: those are read by Review, not extracted. */
 const PATH_LIKE = new RegExp('^(?:[^\\s]+/|\\*|.*\\.[A-Za-z0-9]+$)');

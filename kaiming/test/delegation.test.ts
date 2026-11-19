@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store, type TaskRow } from '../src/store/store.ts';
-import { buildDispatchEnvelope, type DelegationReturn } from '../src/tools/delegation-tools.ts';
+import { buildDispatchEnvelope, type DelegationReturn, type DispatchEnvelopeFacts } from '../src/tools/delegation-tools.ts';
 import { createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 
 const dirs: string[] = [];
@@ -51,7 +51,9 @@ function chiefTool(store: Store, cwd: string, serverWorkDir: string, sessionId: 
   return createTaskTool(contextOf, { chief: true });
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(
+  planMarkdown = '# plan\n\n## 验收\n- observable result\n',
+): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), 'kaiming-delegation-'));
   dirs.push(root);
   const cwd = join(root, 'project');
@@ -105,7 +107,7 @@ async function fixture(): Promise<Fixture> {
     workKind: 'implement',
     goal: 'reset password',
     scope: 'account',
-    planMarkdown: '# plan\n\n## 验收\n- observable result\n',
+    planMarkdown,
     authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
   });
@@ -195,12 +197,89 @@ describe('task dispatch', () => {
     expect(delivered).toContain('.dev/work/');
     expect(delivered).toContain('Acceptance (from the Plan): - observable result');
     expect(delivered).toContain('Scope: not declared');
+    expect(delivered).toContain('Verification profile: none declared in the Plan; treat it as focused');
     expect(delivered).not.toContain('Scope: Scope');
     expect(delivered).toContain('Assigned writeScope: src/');
     expect(delivered).toContain('expected kind: "implementation"');
     expect(delivered).toContain('REPORT_MISSING');
     // A first dispatch has no earlier reports to summarize.
     expect(delivered).not.toContain('Upstream results:');
+  });
+
+  it('injects the Plan verification profile into the developer input', async () => {
+    const f = await fixture('verification profile: focused\n\n## 验收\n- observable result\n');
+    await moveToPhase(f, 'develop');
+    const task = f.store.listTasks('p-1')[0];
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
+    const developer = f.store.listTaskSessions(task?.id ?? '')[0];
+    const delivered = payloadText(f.store.getInput(developer?.currentInputId ?? '')?.payload);
+    expect(delivered).toContain('Verification profile (from the Plan): focused');
+    expect(delivered).toContain('does not widen it; report the conflict');
+  });
+
+  it('does not claim a profile for other roles, other work kinds, or an unevaluated dispatch', () => {
+    const task: TaskRow = {
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      ownerEpoch: 1,
+      requirementId: null,
+      backlogIds: [],
+      type: 'write',
+      workKind: 'implement',
+      flowVersion: 1,
+      reworkCount: 0,
+      requiresTest: true,
+      goal: 'implement the reset flow',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: null,
+      authorizationRefs: ['i-dec'],
+      phase: 'develop',
+      currentSessionIds: [],
+      status: 'active',
+      revision: 1,
+      summary: '',
+      nextStep: null,
+      blockReason: null,
+      completionResultId: null,
+      dirtyBaseline: null,
+      sourceInputId: 'i-dec',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const envelope = (
+      roleId: string,
+      expectedKind: string,
+      overrides: Partial<TaskRow>,
+      facts: Omit<DispatchEnvelopeFacts, 'upstream'>,
+    ): string =>
+      buildDispatchEnvelope(
+        { ...task, ...overrides },
+        { roleId, expectedKind, writeScope: [], refs: [], isContinuation: false },
+        { upstream: [], ...facts },
+      );
+
+    const focused = envelope('developer', 'implementation', {}, { verificationProfile: 'focused' });
+    expect(focused).toContain('Verification profile (from the Plan): focused');
+    expect(focused).toContain('does not widen it; report the conflict');
+    expect(focused).not.toContain('allowed with the reason');
+
+    const tester = envelope('tester', 'test', {}, { verificationProfile: 'focused' });
+    expect(tester).toContain('verify only this acceptance and related regression');
+
+    const broad = envelope('developer', 'implementation', {}, { verificationProfile: 'broad' });
+    expect(broad).toContain('allowed with the reason');
+
+    // Negative controls: the fact follows the member and work kind, not every dispatch.
+    expect(envelope('reviewer', 'review', {}, { verificationProfile: 'focused' })).not.toContain(
+      'Verification profile',
+    );
+    expect(envelope('developer', 'implementation', {}, {})).not.toContain('Verification profile');
+    expect(
+      envelope('developer', 'implementation', { workKind: 'document', phase: 'plan' }, { verificationProfile: 'focused' }),
+    ).not.toContain('Verification profile');
   });
 
   it('tells a designer on a design Task where documents and slices must go, and only there', () => {
