@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -371,7 +372,10 @@ describe('input runner', () => {
     const h = await harness({ replies: [{ kind: 'text', text: 'ok' }, { kind: 'text', text: 'paused' }, { kind: 'text', text: 'resumed' }] });
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
     const runningHandle = h.registry.get('s-1');
-    expect(runningHandle?.session.getActiveToolNames() ?? []).toContain('bash');
+    expect(runningHandle?.session.getActiveToolNames() ?? []).toEqual(
+      expect.arrayContaining(['inspect', 'backlog', 'project']),
+    );
+    expect(runningHandle?.session.getActiveToolNames() ?? []).not.toContain('bash');
 
     const task = h.store.createTask({
       id: 't-reuse',
@@ -397,13 +401,17 @@ describe('input runner', () => {
     expect(pausedHandle).not.toBe(runningHandle);
     expect(pausedHandle?.piFile()).toBe(runningHandle?.piFile());
     const active = pausedHandle?.session.getActiveToolNames() ?? [];
+    expect(active).not.toContain('backlog');
+    expect(active).not.toContain('project');
     expect(active).not.toContain('bash');
-    expect(active).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task']));
+    expect(active).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'inspect', 'task']));
 
     h.store.controlTask({ taskId: task.id, command: 'resume' });
     accept(h.store, 'i-3', 'req-3', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
-    expect(h.registry.get('s-1')?.session.getActiveToolNames() ?? []).toContain('bash');
+    expect(h.registry.get('s-1')?.session.getActiveToolNames() ?? []).toEqual(
+      expect.arrayContaining(['backlog', 'project', 'inspect']),
+    );
   });
 
   it('classifies a failing model run as failed rather than completed', async () => {
@@ -1042,8 +1050,9 @@ describe('input runner', () => {
     const requested = shape.requestedTools as string[];
     const active = shape.activeTools as string[];
     expect(requested).toContain('read');
-    // The chief can check the real state itself, but never carries project-writing tools.
-    expect(requested).toContain('bash');
+    // The chief checks the real state itself, but carries neither a shell nor project-writing tools.
+    expect(requested).toContain('inspect');
+    expect(requested).not.toContain('bash');
     expect(requested).not.toContain('write');
     expect(requested).not.toContain('edit');
     // Only registered names really activate; the record shows both.
@@ -1052,25 +1061,42 @@ describe('input runner', () => {
     expect(shape.taskType).toBe('write');
   });
 
-  it('lets the chief run a shell command itself', async () => {
+  it('gives the chief the read-only inspector instead of a shell', async () => {
     const h = await harness({
       replies: [
         {
           kind: 'tool_calls',
-          calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'echo chief-shell-ok' }) }],
+          calls: [
+            { name: 'inspect', arguments: JSON.stringify({ op: 'status' }) },
+            { name: 'inspect', arguments: JSON.stringify({ op: 'show', rev: '--output=/tmp/evil' }) },
+          ],
         },
         { kind: 'text', text: 'checked' },
       ],
     });
+    const git = (...args: string[]): void => {
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
+        { cwd: h.cwd, stdio: 'ignore' },
+      );
+    };
+    git('init', '--quiet');
+    writeFileSync(join(h.cwd, 'base.ts'), 'export const base = 1;\n');
+    git('add', '--all');
+    git('commit', '--quiet', '-m', 'base');
+    writeFileSync(join(h.cwd, 'chief-probe.ts'), 'export const probe = 1;\n');
 
     const outcome = await h.runner.runNext('s-1');
 
     expect(outcome.kind).toBe('completed');
     const messages = h.registry.get('s-1')?.session.messages ?? [];
-    const observed = JSON.stringify(messages);
-    expect(observed).toContain('chief-shell-ok');
-    // The real command ran: the tool result, not the model's claim, carries the output.
-    expect(messages.some((message) => message.role === 'toolResult')).toBe(true);
+    const results = messages.filter((message) => message.role === 'toolResult');
+    expect(results.length).toBe(2);
+    // The real git state, not the model's claim, comes back.
+    expect(JSON.stringify(results[0])).toContain('chief-probe.ts');
+    // A write flag is not expressible: the revision is rejected before git runs.
+    expect(JSON.stringify(results[1])).toContain('rev must be a revision name');
   }, 30_000);
 
   it('refuses a model file read outside the project as a tool result', async () => {
@@ -1110,11 +1136,23 @@ describe('input runner', () => {
       bashTimeoutSeconds: 1,
       runStallMs: 60_000,
     });
+    // The chief has no shell (P0-4); the guard is exercised by a role that legitimately keeps one.
+    h.store.createSession({ id: 's-dev', projectId: 'p-1', roleId: 'developer', cwd: h.cwd });
+    h.store.acceptInput({
+      inputId: 'i-dev',
+      projectId: 'p-1',
+      sessionId: 's-dev',
+      sourceKey: 'user:dev',
+      requestKey: 'req-dev',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'run' }] },
+    });
 
-    const outcome = await h.runner.runNext('s-1');
+    const outcome = await h.runner.runNext('s-dev');
 
     expect(outcome.kind).toBe('completed');
-    const observed = JSON.stringify(h.registry.get('s-1')?.session.messages ?? []);
+    const observed = JSON.stringify(h.registry.get('s-dev')?.session.messages ?? []);
     expect(observed).toContain('timed out after 1 seconds');
   }, 30_000);
 
@@ -2430,11 +2468,14 @@ describe('input runner', () => {
     const recorded = JSON.parse(h.store.getInput('i-2')?.effectiveConfig ?? '{}') as {
       requestedTools?: string[];
     };
-    // Recorded too, so a reader of the run can see why the shell was missing.
+    // Recorded too, so a reader of the run can see why the project-write domain tools were missing.
+    expect(recorded.requestedTools ?? []).not.toContain('backlog');
+    expect(recorded.requestedTools ?? []).not.toContain('project');
     expect(recorded.requestedTools ?? []).not.toContain('bash');
+    expect(recorded.requestedTools ?? []).toContain('inspect');
   }, 60_000);
 
-  it('hands the chief a paused turn without its shell, and the resumed turn with it', async () => {
+  it('hands the chief a paused turn without its project-write domain tools, keeping inspection', async () => {
     // The probe reads the live registry from inside a tool call, so it records what the model could
     // really call in that turn - not a scope read after the run settled.
     const scopes: string[][] = [];
@@ -2483,17 +2524,19 @@ describe('input runner', () => {
     h.store.controlTask({ taskId: task.id, command: 'pause' });
     accept(h.store, 'i-2', 'req-2', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
-    // `bash` is the one writing-capable tool a chief carries, so it is the honest probe of the hold.
+    // The chief has no shell at all now; the hold withholds the domain tools that can write the
+    // project, while the read-only inspector stays as the honest probe that the turn is alive.
     for (const withheld of ['bash', 'write', 'edit', 'backlog', 'project']) {
       expect(scopes[0] ?? []).not.toContain(withheld);
     }
-    expect(scopes[0] ?? []).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task']));
+    expect(scopes[0] ?? []).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'inspect', 'task']));
 
     h.store.controlTask({ taskId: task.id, command: 'resume' });
     accept(h.store, 'i-3', 'req-3', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
-    // A second probe, in the running Task: the shell is back.
-    expect(scopes[1] ?? []).toContain('bash');
+    // A second probe, in the running Task: the domain write tools are back; the shell never is.
+    expect(scopes[1] ?? []).toEqual(expect.arrayContaining(['backlog', 'project', 'inspect']));
+    expect(scopes[1] ?? []).not.toContain('bash');
   }, 60_000);
 });
 describe('thinking level', () => {

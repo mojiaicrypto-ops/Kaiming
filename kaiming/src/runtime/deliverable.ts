@@ -80,19 +80,38 @@ function collect(cwd: string, dir: string, excluded: ReadonlySet<string>, out: s
  * was reviewed. Files git ignores are removed by the same rule.
  */
 export function snapshotDelivery(cwd: string, excludePaths: readonly string[] = []): DeliveryState {
+  const paths = deliveryPaths(cwd, excludePaths);
+  return { digest: digestOfPaths(cwd, paths), paths };
+}
+
+/**
+ * Every project file the delivery walk observes, before git's ignore filter. Exported for the
+ * completion check: new candidates can be filtered by `git check-ignore` alone, so a turn with no
+ * late files pays only the directory walk.
+ */
+export function projectFilePaths(cwd: string, excludePaths: readonly string[] = []): string[] {
   const excluded = new Set(excludePaths.map((path) => normalize(path)));
   const observed: string[] = [];
   collect(cwd, '', excluded, observed);
-  // A file git ignores is not part of the delivery, even though the walk sees it on disk: no commit
-  // can carry it, and build outputs or the user's own excluded files must not invalidate a review.
-  // If git cannot answer, fail instead of silently treating every observed path as delivery.
+  return observed;
+}
+
+/**
+ * The observed delivery path list without hashing: enough to answer "did anything new appear since
+ * the review" on every completion check, without paying a full digest walk each time. The review and
+ * test digests still use `snapshotDelivery`. A file git ignores is not part of the delivery, even
+ * though the walk sees it on disk: no commit can carry it, and build outputs or the user's own
+ * excluded files must not invalidate a review. If git cannot answer, fail instead of silently
+ * treating every observed path as delivery.
+ */
+export function deliveryPaths(cwd: string, excludePaths: readonly string[] = []): string[] {
+  const observed = projectFilePaths(cwd, excludePaths);
   const observation = ignoredProjectPaths(cwd, observed);
   if (observation.detail !== undefined) {
     throw new Error(`ignored paths could not be determined: ${observation.detail}`);
   }
   const ignored = observation.ignored;
-  const paths = ignored.size === 0 ? observed : observed.filter((path) => !ignored.has(path));
-  return { digest: digestOfPaths(cwd, paths), paths };
+  return ignored.size === 0 ? observed : observed.filter((path) => !ignored.has(path));
 }
 
 /**
@@ -101,6 +120,12 @@ export function snapshotDelivery(cwd: string, excludePaths: readonly string[] = 
  * host/evidence files, not design output.
  */
 export function snapshotDesignDelivery(cwd: string, excludePaths: readonly string[] = []): DeliveryState {
+  const paths = designDeliveryPaths(cwd, excludePaths);
+  return { digest: digestOfPaths(cwd, paths), paths };
+}
+
+/** The design delivery path list without hashing; see `deliveryPaths`. */
+export function designDeliveryPaths(cwd: string, excludePaths: readonly string[] = []): string[] {
   const excluded = new Set(excludePaths.map((path) => normalize(path)));
   const observed: string[] = [];
   for (const dir of ['.dev/product', '.dev/technical']) {
@@ -109,8 +134,7 @@ export function snapshotDesignDelivery(cwd: string, excludePaths: readonly strin
   for (const file of ['AGENTS.md', '.dev/INDEX.md', '.dev/PROJECT.md']) {
     if (isObservedFile(cwd, file)) observed.push(file);
   }
-  const paths = [...new Set(observed)].filter((path) => !excluded.has(normalize(join(cwd, path)))).sort();
-  return { digest: digestOfPaths(cwd, paths), paths };
+  return [...new Set(observed)].filter((path) => !excluded.has(normalize(join(cwd, path)))).sort();
 }
 
 /** Recompute the digest of the very paths a report covered (missing files count as changed). */
@@ -240,6 +264,37 @@ export function changedInheritedPaths(
       return observed && hashFile(join(cwd, path)) !== baseline[path];
     })
     .sort();
+}
+
+/**
+ * Paths the current delivery contains that the last passed review never covered. The caller passes
+ * the observed path list (not digests: this runs on every completion check). Inherited baseline paths
+ * are excluded by identity: their changes are `changedInheritedPaths`' finding, not a new file, and
+ * an untouched inherited file is the user's own work. This is exactly the "created after the review"
+ * set for the paths a review of this Task kind can bind; settlement output never lands here.
+ */
+export function newReviewableDeliveryPaths(
+  cwd: string,
+  paths: readonly string[],
+  reviewed: readonly string[],
+  binding: DeliveryBinding,
+  baseline: DirtyBaseline | null | undefined,
+): string[] {
+  const covered = new Set(reviewed);
+  const candidates = paths.filter(
+    (path) =>
+      !covered.has(path) &&
+      isReviewableDeliveryPath(path, binding) &&
+      !(baseline != null && Object.hasOwn(baseline, path)),
+  );
+  if (candidates.length === 0 || binding.design) return candidates.sort();
+  // Only the candidates need git's ignore answer; the paths the review already covered were filtered
+  // when that review ran.
+  const observation = ignoredProjectPaths(cwd, candidates);
+  if (observation.detail !== undefined) {
+    throw new Error(`ignored paths could not be determined: ${observation.detail}`);
+  }
+  return candidates.filter((path) => !observation.ignored.has(path)).sort();
 }
 
 /** Whether a path inside the project is a file the walk would observe (symlinks are not). */

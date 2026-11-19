@@ -6,7 +6,7 @@
 
 | roleId | 责任 | 能力（Pi 原生文件工具按 Task 类型裁剪） |
 |---|---|---|
-| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/bash；五个核心工具、task（全 op）、backlog（全 op）、project、question、web_search、web_fetch、browser |
+| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/inspect；五个核心工具、task（全 op）、backlog（全 op）、project、question、web_search、web_fetch、browser |
 | designer | 产品分析、模块内聚、规格与切片、适用技术架构/契约 | read/grep/find/ls/write/edit/bash、backlog（list/get/add/edit）、agent_report、task(op=get)、question、web_search、web_fetch |
 | developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、codemode、agent_report、task(op=get)、backlog.list/get、question、web_search、web_fetch、browser |
 | reviewer | 独立检查验收与范围、Plan 和实际成果 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
@@ -14,16 +14,20 @@
 | settler | 更新已验证知识/记录，保存成果，关闭待办 | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、backlog（list/get/add/close/edit）、question |
 | investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
 
-所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、backlog 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。主管可用 bash 直接核实实际状态（git、测试入口、文件布局），实现类写入仍由专业 Session 承担；待办文件只经 `backlog` 工具写入，不用 bash 改写（只能由提示词约束，因为主管的 bash 本身能写文件）。设计与文档整理需要移动或删除文件（归档、改名、去掉重复正文）时用 bash（`git mv`/`rm`）：Pi 没有 rm/mv 工具，不另造文件管理工具；移动后同步引用，不留下两份正文。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。investigator 不持有 bash/write：需要执行脚本或测试才能核实时，在报告中把对应 check 标为 `not_run`，写明最小复现命令和缺失证据，由主管在适用阶段派 tester，或主管自己用 bash 执行；结果作为证据回到核实，不改变 investigator 的只读身份，也不新增执行工具。
+所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、backlog 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。主管用只读 `inspect`（固定 argv 的 git status/log/diff/show/rev-parse）与 read/grep/find/ls 核实实际状态，不持有 shell 或 write/edit；实现、测试运行与结算提交由专业 Session 承担。待办文件只经 `backlog` 工具写入。设计与文档整理需要移动或删除文件（归档、改名、去掉重复正文）时用 bash（`git mv`/`rm`）：Pi 没有 rm/mv 工具，不另造文件管理工具；移动后同步引用，不留下两份正文。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。investigator 不持有 bash/write：需要执行脚本或测试才能核实时，在报告中把对应 check 标为 `not_run`，写明最小复现命令和缺失证据，由主管在适用阶段派 tester；结果作为证据回到核实，不改变 investigator 的只读身份，也不新增执行工具。
 **codemode（Pi 批量脚本工具）只对 developer/tester 开放**：一个模型回合内由 QuickJS 沙箱执行一段脚本，嵌套调用本角色已允许的工具并只把脚本输出交回模型。嵌套调用走同一工具管道，allowlist、`tool_call` hooks、删除门禁与文件边界不变；read Task 中脚本同样调不到 bash/write。宿主对每个 session 预装该扩展（inactive），未列入 allowlist 的角色不受影响。browser 动作在脚本内顺序 `await`，不对同一页面 `Promise.all`；视觉截图仍由脚本外的直接 browser 调用产生（脚本只拿到截图的文字事实，拿不到图片附件）。
 **bash 超时由宿主兜底**：模型未传 `timeout` 时，宿主扩展为每次 bash 调用注入默认值（`KAIMING_BASH_TIMEOUT_SECONDS`，默认 600 秒；0 关闭），显式值优先。超时是工具错误结果，模型可换命令或加大超时重试，不会把整个 run 拖到 15 分钟 stall。
 **删除命令必须用户确认**：宿主在每次 bash 调用前用文本规则识别**真正删除**的命令——`rm`/`rmdir`/`shred`/`unlink`、`find -delete`、`git clean -f`、`git stash drop/clear`、`git branch -D`，以及脚本里的 `fs.*Sync`/`os.remove`/`shutil.rmtree`。`git checkout --`、`git restore`、`git reset --hard`、`git push --force` 只是丢弃工作区改动或改写远端历史，不再触发确认。命中时经已绑定的交互适配器发起 select（持久化 interaction、成员问题呈现在主管频道、等待期间不计 stall）：`Approve once` 执行本次，`Trust all commands in this session` 让本会话后续所有 bash（含删除）不再询问，`Reject` 以 `isError` 工具结果返回原因，模型可换法。信任是显式的会话内选择，Pi 实例重建不重置，进程重启或新建会话后恢复询问。规则先按引号感知的 shell 分段，再只认命令位置（段首、`sudo`/`xargs` 等包装之后、`$(…)`/反引号内），因此 commit 消息、echo 参数、sed/grep 模式里的删除词不误问；这是文本级门禁而非沙箱，绕过写法（base64 解码执行等）仍靠工具集白名单（read Task 无 bash）与交付核对兜底。无 UI 时拒绝执行。**提示词层同时约束**：base 明确“删除不得伪装”——只允许直接可读、用户可见确认的命令，禁止脚本删除、截断覆盖、管道内隐藏、解码执行、换写法重试被拒的删除；specialists 的 shell 段与 chief 的角色正文重复该边界。提示词是软约束，宿主的 select 门禁才是执行边界，两者叠加而不互相替代。
 **文件工具限制在项目目录内**：`read`/`write`/`edit`/`grep`/`find`/`ls` 的路径参数先解析真实祖先（`..`、绝对路径、符号链接都按落点判断），落在项目根之外即拒绝，以 `isError` 工具结果说明原因。只读工具保留一个例外：`agentDir/work`（`web_fetch` 保存的网页、报告、截图）可读；`write`/`edit` 不适用该例外。私有存储的拒绝优先于项目边界，原因仍按私有存储报告。`bash` 不在此规则内——它由删除门禁与工具集白名单治理，路径范围留待后续沙箱方案。
 
+**主管没有 shell（P0-4）**：`inspect` 用 `execFile` 执行固定子命令表，无 shell；模型只能给 `limit`（1–50）、校验过的 `rev` 与项目相对 `path`，不能传 flag。调用固定带 `--no-pager -c core.fsmonitor=false`，`diff`/`show` 带 `--no-ext-diff --no-textconv`，环境设 `GIT_OPTIONAL_LOCKS=0`/`GIT_TERMINAL_PROMPT=0`，因此 status 不刷新 index、不运行仓库 hook。它不是 OS 沙箱的替代：写能力由工具集直接缺席来保证，结算提交交给 settler（保留 bash），`task(op=end)` 只观察复核路径的提交事实。
+
 
 ## G2 模型工具
 
 五个领域工具由 customTools 注册：task（Task 全流程）、agent_report、backlog、project，以及 question；question 由官方示例移植的内置扩展经 pi.registerTool 注册一次，resourceLoader 显式加载，不增加通用扩展系统。[SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md)
+
+只读 `inspect` 同样经 customTools 注册，但只发给 chief（G1）；它不是领域工具全集成员，其他角色即使经宿主 union 也取不到。
 
 task、agent_report、backlog、project 按工具级注册 Pi executionMode=sequential；专业只读 task 可沿用原生执行。模式是静态工具配置，不按 op 动态切换，不拆第二套调度器。
 
@@ -154,7 +158,7 @@ Task 仅主管总体 Plan；子 Agent 可自行计划或直接完成目标，不
 
 只有一份实际交付：同一 Task 内并行写成员按声明的 writeScope 分工，全部停稳后的工作树就是被复核的对象；**组合成果按最终组合重验证**，不汇总各自「通过」的报告。首版不支持并行多个 Task 的独立工作树。
 
-read：有效 investigation/recovery 结果、全部成员停稳、无待处理交互/未核实中断即可结束，不强制项目文件或 Git。write：全部专业工作已停稳、无开放交互或未核实中断，最近一次独立复核 passed、requiresTest=true 时最近一次测试 passed、settlement 已保存，且交付状态自该复核后未变化；**项目有 Git 时，复核覆盖的交付路径必须相对 HEAD 已提交**（`runtime/git-delivery.ts` 观察，`tools/completion-git.ts` 组合：仓库判定、HEAD、这些路径的 dirty 集合、被 `.gitignore` 排除的路径）。**被 Git 忽略的未跟踪文件不是交付**：Review 的路径清单不包含它们，旧 Review 已记录的这类路径在 end 时也过滤；已跟踪文件即使匹配 ignore 规则仍属于交付，因为 Git 仍能提交它。无仓库或只读 Task 不产生该项。三类事实各自成缺项，不合并：未提交（顶层或内嵌仓库的 dirty 路径）、被忽略（顶层 ignored 路径在核对前已过滤；这里指内嵌仓库根被外层忽略，或内嵌仓库里的交付路径被忽略；先建议移出交付，规则写错时才 `git add -f`）、内嵌仓库未记录（在它自己的仓库里提交后，再由外层记录该仓库；submodule 的合法形态因此可以正常收口）。仓库标记按项目目录向上查找（项目可以位于更大仓库之下）；找到 `.git` 但 git 读不出来（含 git 不可用、gitdir 损坏）一律按缺项阻断，不静默放行；只有向上都找不到 `.git` 才是本机保存；主管声明问题已处理并确认目标满足。缺项保持未完成，不重做未变化成果。提交由模型执行（主管可用 bash，或由结算角色执行），程序只观察与拒绝，不代提交。
+read：有效 investigation/recovery 结果、全部成员停稳、无待处理交互/未核实中断即可结束，不强制项目文件或 Git。write：全部专业工作已停稳、无开放交互或未核实中断，最近一次独立复核 passed、requiresTest=true 时最近一次测试 passed、settlement 已保存，且交付状态自该复核后未变化，且当前交付快照中不存在复核未覆盖的可评审路径（复核后新增的代码/文档/设计产物要求重新 Review，无 Git 项目同样生效）；**项目有 Git 时，复核覆盖的交付路径必须相对 HEAD 已提交**（`runtime/git-delivery.ts` 观察，`tools/completion-git.ts` 组合：仓库判定、HEAD、这些路径的 dirty 集合、被 `.gitignore` 排除的路径）。**被 Git 忽略的未跟踪文件不是交付**：Review 的路径清单不包含它们，旧 Review 已记录的这类路径在 end 时也过滤；已跟踪文件即使匹配 ignore 规则仍属于交付，因为 Git 仍能提交它。无仓库或只读 Task 不产生该项。三类事实各自成缺项，不合并：未提交（顶层或内嵌仓库的 dirty 路径）、被忽略（顶层 ignored 路径在核对前已过滤；这里指内嵌仓库根被外层忽略，或内嵌仓库里的交付路径被忽略；先建议移出交付，规则写错时才 `git add -f`）、内嵌仓库未记录（在它自己的仓库里提交后，再由外层记录该仓库；submodule 的合法形态因此可以正常收口）。仓库标记按项目目录向上查找（项目可以位于更大仓库之下）；找到 `.git` 但 git 读不出来（含 git 不可用、gitdir 损坏）一律按缺项阻断，不静默放行；只有向上都找不到 `.git` 才是本机保存；主管声明问题已处理并确认目标满足。缺项保持未完成，不重做未变化成果。提交由 settler 执行（它保留 bash；主管无 shell），程序只观察与拒绝，不代提交。
 
 **交付观察必须可回答**：有 Git 时只对已观察到的路径分批执行 `git check-ignore`；Git 存在但无法判定 ignored 状态时，Review/Test 不记录，`end` 把该事实列为缺项，不能静默把全部路径当作交付。
 
@@ -181,7 +185,7 @@ base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.
 
 | roleId / 完整正文 | 本次目标与依据上下文 | 权限及工作环境 |
 |---|---|---|
-| chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch / 只读或修改类型；可直接跑命令核实状态，不承担实现写入 |
+| chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch / 只读或修改类型；用 inspect 核实 Git 状态，无 shell/写入，不承担实现或结算提交 |
 | designer / [designer](prompts/designer.md) | 设计目标、待办与规格、产品/技术索引及选定模块、已确认决定、Plan | 普通文档写入负责人；规格直接写入，待办经 backlog 工具；不默认整项目或所有模块 |
 | developer / [developer](prompts/developer.md) | 指定实施目标、规格与 Plan 的验收/范围、必要技术接口、依赖结果、适用单元/集成/E2E 测试入口 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置；待办只读 |
 | reviewer / [reviewer](prompts/reviewer.md) | 规格与 Plan 的验收/范围、实际交付、真实证据、越界文件清单 | 独立只读成果；无作者、主管、其他 Reviewer 聊天自评，无任意 bash |

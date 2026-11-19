@@ -14,13 +14,25 @@ describe('role tool sets', () => {
   });
 
   it('lets a write Task keep shell for the roles the contract documents, and only those', () => {
-    expect(toolSetFor('chief', 'write').allowlist).toContain('bash');
+    // The chief orchestrates and inspects; it never writes through a shell (P0-4).
+    expect(toolSetFor('chief', 'write').allowlist).not.toContain('bash');
+    expect(toolSetFor('chief', 'write').allowlist).toContain('inspect');
     expect(toolSetFor('developer', 'write').allowlist).toContain('bash');
     expect(toolSetFor('tester', 'write').allowlist).toContain('bash');
     expect(toolSetFor('settler', 'write').allowlist).toContain('bash');
     // Document work moves and deletes files, and Pi has no rm/mv tool.
     expect(toolSetFor('designer', 'write').allowlist).toContain('bash');
     expect(toolSetFor('reviewer', 'write').allowlist).not.toContain('bash');
+  });
+
+  it('gives the read-only inspector to the chief alone', () => {
+    for (const roleId of ROLE_IDS) {
+      if (roleId === 'chief') continue;
+      expect(toolSetFor(roleId, 'write').allowlist, roleId).not.toContain('inspect');
+      expect(toolSetFor(roleId, undefined).allowlist, roleId).not.toContain('inspect');
+    }
+    // Inspection survives a read hold: it cannot write, so withholding it would only blind the chief.
+    expect(toolSetFor('chief', 'read').allowlist).toContain('inspect');
   });
 
   it('opens no project-writing tool and no shell in a read Task', () => {
@@ -138,10 +150,12 @@ describe('role tool sets', () => {
     );
     expect(reviewerWrite.denied).not.toContain('agent_report');
 
-    // The chief holds backlog/project and shell, but not the report tool or project writes.
+    // The chief holds backlog/project and the read-only inspector, but not the report tool, project
+    // writes, or a shell.
     const chief = toolSetFor('chief', undefined);
     expect(chief.denied).not.toContain('backlog');
-    expect(chief.denied).not.toContain('bash');
+    expect(chief.denied).not.toContain('inspect');
+    expect(chief.denied).toContain('bash');
     expect(chief.denied).toEqual(expect.arrayContaining(['agent_report', 'write', 'edit']));
   });
 
@@ -155,7 +169,7 @@ describe('role tool sets', () => {
     // the Task is not running (S3: "项目写 op 仍拒绝").
     const held = toolSetFor('chief', 'write', 'paused');
     expect(held.allowlist).toEqual(
-      expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task', 'question']),
+      expect.arrayContaining(['read', 'grep', 'find', 'ls', 'inspect', 'task', 'question']),
     );
     for (const withheld of ['write', 'edit', 'bash', 'backlog', 'project']) {
       expect(held.allowlist).not.toContain(withheld);
@@ -163,9 +177,10 @@ describe('role tool sets', () => {
     }
     expect(held.projectReadOnly).toBe(true);
 
-    // Resuming the Task restores exactly the running set.
+    // Resuming the Task restores exactly the running set; the chief still has no shell.
     expect(toolSetFor('chief', 'write', 'running').allowlist).toEqual(toolSetFor('chief', 'write').allowlist);
-    expect(toolSetFor('chief', 'write').allowlist).toContain('bash');
+    expect(toolSetFor('chief', 'write').allowlist).toContain('inspect');
+    expect(toolSetFor('chief', 'write').allowlist).not.toContain('bash');
   });
 });
 

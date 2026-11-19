@@ -148,3 +148,11 @@
 - **问题**：设计完成门禁只读 `.dev/product/`/`.dev/technical/`，但这两条路径只写在 designer 正文；主管据此把设计写进 `.dev/specs`/`.dev/tech` 后被门禁拒绝。backlog 工具描述把 add/close/edit 统称为“Writes allocate ids…”，主管误以为 `edit` 会刷新更新时间并绑定设计 Task。
 - **实现**：base v6 固定写明知识目录；chief v8 写明设计门禁路径与切片写入通道；backlog/project 工具描述改准确；design+designer 派发信封追加同一条宿主事实。存储行为未改：`edit` 仍是纯文本替换，不新增 op。
 - **证据**：design designer 信封含目录门禁与 add/edit 说明，developer 与 reviewer 信封不含（负向对照）；chief 装配文本包含目录与门禁句，且不包含 designer 的 “Default responsibilities”（说明来自 base）。`delegation+context` 32/32、`backlog-tools+task-tools+project` 42/42、`tsc`、`check:prompts` 15/15。提示词需重启 workbench 后生效。
+
+### 2026-11-19 · P0-4 主管只读 inspect 与 Review 后新增文件门禁
+
+- **问题**：主管没有 `write/edit`，但保留 `bash`；主管一条 bash 可写完 25 个文件，然后不建 Task、以纯文本结束回合，宿主判 `completed`，所有 Task 门禁一次都不触发。另一个同级漏洞：Review 之后新增的交付文件不在 `reviewed.paths`，摘要复查与 inherited 复查都看不到，`task(op=end)` 仍可放行。
+- **决定**：用户拍板 B+ —— 去掉主管 bash，换成宿主只读 `inspect`；用 `task(op=end)` 的“Review 后新增可评审文件”校验替代跨回合 Git 账本；提示词写明免打扰授权不等于跳过 Task。
+- **实现**：`tool-sets` chief = read/grep/find/ls/inspect（其他角色 denied inspect，paused/read 仍保留它）；`inspect` 以 `execFile` 执行固定 argv，只允许 status/log/diff/show/rev-parse，禁 ext-diff/textconv/fsmonitor 与可选锁，模型不能传 flag；结算提交归 settler。`deliverable.newReviewableDeliveryPaths` 在 `store.completionBlockers` 中检查当前交付路径减去 Review 路径（排除 baseline、按 Task 类型过滤、候选才查 gitignore），无 Git 同样生效。chief v9 增加免打扰语义。
+- **证据**：`test/inspect-tool.test.ts` 6/6（固定 argv、bad rev/path、真实仓库只读：status/HEAD 前后不变、非仓库报错、仓库配置的 external diff/textconv/fsmonitor helper 不执行）；`inspect-tool + tool-sets + report + runtime + deletion-gate-runtime` focused 107/107；全量 67 文件 683/683；`tsc`；`check:prompts` 15/15。独立 Test 用 7 条变异（加回 chief bash、放开 bad rev、去掉 fsmonitor 抑制、清空新文件检查、去掉 baseline 排除、去掉 ignored 过滤、把 docs 当代码交付）逐一确认对应用例按预期变红。Review 后新增代码文件、设计产物、无 Git 项目均被报告，settlement 文档、ignored 构建产物、未变的 inherited 文件不误报（`report.test.ts` 5 例）。提示词按进程缓存，重启 workbench 后才生效。
+- **边界**：不引入跨回合写入账本；未回填已有脏工作区的历史；`inspect` 不是沙箱，只保证“主管没有写能力”；删除、测试运行、提交由保留 bash 的专业角色承担。

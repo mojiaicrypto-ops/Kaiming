@@ -45,11 +45,13 @@ async function harness(replies: readonly StubReply[]): Promise<GateHarness> {
     store.close();
   });
   store.createProject({ id: 'p-1', realPath: env.cwd });
-  store.createSession({ id: 's-1', projectId: 'p-1', roleId: 'chief', cwd: env.cwd });
+  // The chief has no shell (P0-4); a developer session at its normal (unbound) tool set carries the
+  // bash calls this gate wraps.
+  store.createSession({ id: 's-dev', projectId: 'p-1', roleId: 'developer', cwd: env.cwd });
   store.acceptInput({
     inputId: 'i-1',
     projectId: 'p-1',
-    sessionId: 's-1',
+    sessionId: 's-dev',
     sourceKey: 'user:req-1',
     requestKey: 'req-1',
     method: 'session.input.submit',
@@ -81,7 +83,7 @@ const REJECT = 'Reject';
 async function runWithChoice(h: GateHarness, choice: string): Promise<RunOutcome> {
   const answering = (async () => {
     for (let attempt = 0; attempt < 500; attempt += 1) {
-      const question = h.store.listPendingInteractionsForChief('s-1')[0];
+      const question = h.store.listPendingInteractions('s-dev')[0];
       if (question !== undefined) {
         // The durable answer first, then the in-memory waiter — exactly what interaction.respond
         // does, so the record is no longer pending when the run continues.
@@ -99,7 +101,7 @@ async function runWithChoice(h: GateHarness, choice: string): Promise<RunOutcome
     }
     throw new Error('the gate never asked its question');
   })();
-  const outcome = await h.runner.runNext('s-1');
+  const outcome = await h.runner.runNext('s-dev');
   await answering;
   return outcome;
 }
@@ -141,7 +143,7 @@ describe('the deletion gate in a real run', () => {
     expect(outcome.kind).toBe('completed');
     expect(existsSync(victim)).toBe(true);
     // The refusal is a visible tool result, so the model knows why nothing was deleted.
-    expect(h.store.listPendingInteractionsForChief('s-1')).toHaveLength(0);
+    expect(h.store.listPendingInteractions('s-dev')).toHaveLength(0);
   }, 30_000);
 
   it('does not ask for an ordinary command', async () => {
@@ -150,10 +152,10 @@ describe('the deletion gate in a real run', () => {
       { kind: 'text', text: 'ran without a question' },
     ]);
 
-    const outcome = await h.runner.runNext('s-1');
+    const outcome = await h.runner.runNext('s-dev');
 
     expect(outcome.kind).toBe('completed');
-    expect(h.store.listPendingInteractionsForChief('s-1')).toHaveLength(0);
+    expect(h.store.listPendingInteractions('s-dev')).toHaveLength(0);
   }, 30_000);
 
   it('trusts every later command in the session after the explicit choice', async () => {
@@ -176,6 +178,6 @@ describe('the deletion gate in a real run', () => {
     expect(outcome.kind).toBe('completed');
     expect(existsSync(first)).toBe(false);
     expect(existsSync(second)).toBe(false);
-    expect(h.store.listPendingInteractionsForChief('s-1')).toHaveLength(0);
+    expect(h.store.listPendingInteractions('s-dev')).toHaveLength(0);
   }, 30_000);
 });

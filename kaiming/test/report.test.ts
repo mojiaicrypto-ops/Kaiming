@@ -660,3 +660,118 @@ describe('inherited dirty files', () => {
     expect(row?.deliveryState?.paths).not.toContain(artifact);
   });
 });
+
+describe('completion · files created after the passed review', () => {
+  function git(cwd: string, args: readonly string[]): void {
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
+      cwd,
+      stdio: 'ignore',
+    });
+  }
+
+  const appeared = (gaps: readonly string[]): string[] =>
+    gaps.filter((gap) => gap.includes('appeared after the last passed review'));
+
+  async function review(f: Fixture): Promise<void> {
+    const result = await f.report.execute(
+      'call-1',
+      report({ summary: 'reviewed', body: '# review\n\nfine\n', verdict: 'passed' }),
+    );
+    expect(result.isError).toBe(false);
+  }
+
+  it('reports a late code file and clears the gap when it is removed', async () => {
+    const f = fixture({ type: 'write', roleId: 'reviewer', expectedKind: 'review' });
+    await review(f);
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([]);
+
+    writeFileSync(join(f.cwd, 'late.ts'), 'export const late = 1;\n', 'utf8');
+    const gaps = appeared(f.store.completionBlockers(f.taskId));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toContain('late.ts');
+
+    rmSync(join(f.cwd, 'late.ts'));
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([]);
+  });
+
+  it('does not demand a review for settlement docs after a code review', async () => {
+    const f = fixture({
+      type: 'write',
+      roleId: 'reviewer',
+      expectedKind: 'review',
+      beforeTask: (cwd) => {
+        git(cwd, ['init', '--quiet']);
+        mkdirSync(join(cwd, 'src'), { recursive: true });
+        writeFileSync(join(cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
+        git(cwd, ['add', '--all']);
+        git(cwd, ['commit', '--quiet', '-m', 'base']);
+        return {};
+      },
+    });
+    await review(f);
+
+    mkdirSync(join(f.cwd, 'docs'), { recursive: true });
+    writeFileSync(join(f.cwd, 'docs', 'changelog.md'), '# changed\n', 'utf8');
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([]);
+
+    writeFileSync(join(f.cwd, 'src', 'late.ts'), 'export const late = 1;\n', 'utf8');
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual(['files appeared after the last passed review (src/late.ts); review the current delivery again']);
+  });
+
+  it('leaves an inherited file to the inherited-change check, not the new-file check', async () => {
+    const f = fixture({
+      type: 'write',
+      roleId: 'reviewer',
+      expectedKind: 'review',
+      beforeTask: (cwd) => {
+        git(cwd, ['init', '--quiet']);
+        writeFileSync(join(cwd, 'a.ts'), 'export const a = 1;\n', 'utf8');
+        git(cwd, ['add', '--all']);
+        git(cwd, ['commit', '--quiet', '-m', 'base']);
+        writeFileSync(join(cwd, 'inherited.ts'), 'export const i = 1;\n', 'utf8');
+        return captureDirtyBaseline(cwd);
+      },
+    });
+    await review(f);
+
+    writeFileSync(join(f.cwd, 'inherited.ts'), 'export const i = 2;\n', 'utf8');
+    const gaps = f.store.completionBlockers(f.taskId);
+    expect(appeared(gaps)).toEqual([]);
+    expect(gaps.some((gap) => gap.includes('already dirty when the Task was created'))).toBe(true);
+  });
+
+  it('keeps an ignored build output out of the late-file check', async () => {
+    const f = fixture({
+      type: 'write',
+      roleId: 'reviewer',
+      expectedKind: 'review',
+      beforeTask: (cwd) => {
+        git(cwd, ['init', '--quiet']);
+        writeFileSync(join(cwd, 'a.ts'), 'export const a = 1;\n', 'utf8');
+        writeFileSync(join(cwd, '.gitignore'), 'dist/\n', 'utf8');
+        git(cwd, ['add', '--all']);
+        git(cwd, ['commit', '--quiet', '-m', 'base']);
+        return {};
+      },
+    });
+    await review(f);
+
+    mkdirSync(join(f.cwd, 'dist'), { recursive: true });
+    writeFileSync(join(f.cwd, 'dist', 'out.js'), 'built\n', 'utf8');
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([]);
+  });
+
+  it('reports a design artifact created after a design review, and only design artifacts', async () => {
+    const f = fixture({ type: 'write', roleId: 'reviewer', expectedKind: 'review', design: true });
+    await review(f);
+
+    writeFileSync(join(f.cwd, 'notes.md'), '# unrelated\n', 'utf8');
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([]);
+
+    mkdirSync(join(f.cwd, '.dev', 'technical'), { recursive: true });
+    writeFileSync(join(f.cwd, '.dev', 'technical', 'late.md'), '# late contract\n', 'utf8');
+    expect(appeared(f.store.completionBlockers(f.taskId))).toEqual([
+      'files appeared after the last passed review (.dev/technical/late.md); review the current delivery again',
+    ]);
+  });
+});

@@ -47,6 +47,7 @@ import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
 import { createWebFetchTool } from '../tools/web-fetch.ts';
+import { createInspectTool } from '../tools/inspect-tool.ts';
 import { createWebSearchTool } from '../tools/web-search.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import { createBacklogTool, type BacklogToolContext } from '../tools/backlog-tools.ts';
@@ -716,6 +717,8 @@ export class InputRunner {
               }), { chief: true }),
               ...backlogTools,
               ...projectTools,
+              // Read-only git inspection replaces the shell the chief used to hold (P0-4).
+              createInspectTool(() => ({ cwd: session.cwd })),
             ]
           : [
               createTaskGetTool(contextOf),

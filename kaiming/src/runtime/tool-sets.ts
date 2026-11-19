@@ -18,6 +18,12 @@ export type TaskType = 'read' | 'write';
 export const PROJECT_WRITE_TOOLS: readonly string[] = ['write', 'edit'];
 /** Shell access: documented per role, and never in a read Task. */
 const SHELL_TOOL = 'bash';
+/**
+ * The chief's read-only git tool (P0-4). A shell is a general write tool; the orchestrator that can
+ * write files can complete a "just do it" turn without ever creating a Task, so its inspection
+ * capability is a fixed read-only argv instead.
+ */
+const INSPECT_TOOL = 'inspect';
 /** Domain tools that can write project files; their read ops arrive with their own permission work. */
 const PROJECT_WRITING_DOMAIN_TOOLS: readonly string[] = ['backlog', 'project'];
 /** Reading tools every role has, including the write-capable ones. */
@@ -33,9 +39,10 @@ const CODEMODE_TOOL = 'codemode';
 
 /** Native tool sets exactly as the contract documents them. */
 const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
-  // The chief investigates and checks the real state itself (git, a test entry point, a file layout)
-  // instead of trusting a summary; implementing Task work still belongs to the delegated roles.
-  chief: [...READ_TOOLS, SHELL_TOOL],
+  // The chief checks the real state itself (git status/log/diff, file layout) instead of trusting a
+  // summary. It has no shell and no write tool: inspection is `inspect`, implementation and the
+  // settlement commit belong to the delegated roles.
+  chief: [...READ_TOOLS, INSPECT_TOOL],
   // Document work includes moving and deleting files (archive, rename, remove a duplicate body):
   // Pi has no rm/mv tool, so the shell is the native way to do it.
   designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
@@ -66,9 +73,10 @@ const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
 };
 
 /**
- * Every domain tool name the host registers, in one place: P3-e must register exactly these names, so
- * the tables above and the host registration cannot drift apart (a registered-but-unlisted tool
- * would be admitted to every role through the host union).
+ * Every shared domain tool name the host registers. P3-e must register exactly these names, so the
+ * tables above and the host registration cannot drift apart (a registered-but-unlisted tool would be
+ * admitted to every role through the host union). The chief-only `inspect` is deliberately not here:
+ * it is named in the chief's native slot, and `TOOL_UNIVERSE` denies it to every other role.
  */
 export const DOMAIN_TOOL_NAMES: readonly string[] = [
   'task',

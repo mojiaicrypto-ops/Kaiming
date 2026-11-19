@@ -6,11 +6,15 @@
  * Driver: Node's built-in `node:sqlite` (no native dependency).
  */
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   changedInheritedPaths,
+  projectFilePaths,
+  designDeliveryPaths,
   digestOfPaths,
   isCodeDeliveryPath,
+  newReviewableDeliveryPaths,
   type DeliveryState,
   type DirtyBaseline,
 } from '../runtime/deliverable.ts';
@@ -2722,17 +2726,41 @@ export class Store {
       );
     }
     if (reviewed !== null) {
+      const cwd = this.requireTaskCwd(task);
+      const design = task.workKind === 'design' && task.flowVersion >= 1;
+      const knowledge = knowledgeEntryPaths(this.getProject(task.projectId)?.initializationRef);
+      const binding = {
+        design,
+        codeBound: reviewed.paths.some((path) => isCodeDeliveryPath(path)),
+        excluded: new Set(knowledge),
+      };
       // An inherited file that changed after the review was never in its path list: the review did
       // not cover that change, so the delivery needs a new review rather than a commit. Only paths a
       // review could bind count; settlement output and host bookkeeping never demand one.
-      const uncovered = changedInheritedPaths(this.requireTaskCwd(task), task.dirtyBaseline, reviewed.paths, {
-        design: task.workKind === 'design' && task.flowVersion >= 1,
-        codeBound: reviewed.paths.some((path) => isCodeDeliveryPath(path)),
-        excluded: new Set(knowledgeEntryPaths(this.getProject(task.projectId)?.initializationRef)),
-      });
+      const uncovered = changedInheritedPaths(cwd, task.dirtyBaseline, reviewed.paths, binding);
       if (uncovered.length > 0) {
         gaps.push(
           `files that were already dirty when the Task was created changed after the last passed review (${uncovered.join(', ')}); review the current delivery again`,
+        );
+      }
+      // A file created after the review is outside its recorded path list, so neither the digest
+      // recheck nor the inherited check above sees it. Observe the delivery's paths now: anything
+      // reviewable that the review did not cover means the reviewer (or tester) judged less than
+      // what settlement would hand over. This also holds without git.
+      try {
+        const knowledgeAbsolute = knowledge.map((path) => join(cwd, path));
+        const observed = design
+          ? designDeliveryPaths(cwd, knowledgeAbsolute)
+          : projectFilePaths(cwd, knowledgeAbsolute);
+        const added = newReviewableDeliveryPaths(cwd, observed, reviewed.paths, binding, task.dirtyBaseline);
+        if (added.length > 0) {
+          gaps.push(
+            `files appeared after the last passed review (${added.join(', ')}); review the current delivery again`,
+          );
+        }
+      } catch (error) {
+        gaps.push(
+          `the current delivery could not be observed (${error instanceof Error ? error.message : String(error)}); check the working tree and git state, then end again`,
         );
       }
     }
