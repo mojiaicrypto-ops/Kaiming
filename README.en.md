@@ -1,223 +1,144 @@
-# Kaiming
+<div align="center">
 
-[简体中文](README.md) | **English**
+# Kaiming · 开明
 
-> AI coding agents can already write good code, but delivering a piece of work takes far more than one generation: goals must stay consistent across conversations and phases, conclusions must survive independent checks, progress must survive disconnects and restarts, and results must stay in the project as documents. Kaiming turns that entire process into a self-hosted, single-user workbench.
+**Self-Hosted Engineering Workbench for Continuous AI Coding-Agent Delivery**
 
-Kaiming is not a code-completion plugin, and it is not a chat transcript that disappears when the tab closes. It keeps the full lifecycle of a piece of software work — backlog items, specs, the overall Plan, Tasks, phases, specialist Sessions, reports, verification results and final settlement — as a traceable project asset, and delivers three outcomes:
+Turn one-off AI chats into a disciplined engineering loop: **Spec → Plan → Develop → Independent Review → Independent Test → Document Settlement**.  
+So AI doesn't just write code—it finishes the job, updates project memory, and lets you pick up right where you left off.
 
-1. **The work gets done**: real code or document results, with a record of which checks ran and what issues remain.
-2. **The project remembers**: backlog items, specs and project knowledge, code and test entry points are updated as work proceeds — not just a chat summary.
-3. **You can pick up next time**: work continues after you leave; reopening or switching sessions finds the progress, results and next step.
+[简体中文](README.md) | **English** · [Quick Start](#-quick-start) · [How It Works](#-how-it-works) · [Architecture](#-architecture) · [Install & Ops](docs/install.en.md) · [Docs Index](docs/INDEX.md)
 
-**Status: early development.** Before using it, read [Installation and setup](docs/install.en.md), the [product overview (Chinese)](docs/productnew/README.md) and [Security boundaries](#security-boundaries).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-24_LTS-339933?logo=node.js&logoColor=white)](docs/install.en.md)
+[![Runtime](https://img.shields.io/badge/Runtime-Resident_Server_%2B_SQLite-003B57?logo=sqlite&logoColor=white)](#4-resident-server--honest-recovery)
+[![Protocol](https://img.shields.io/badge/MCP-stdio_%2B_HTTP-6E56CF)](#5-dual-entry-points-web-workbench--external-agents-mcp)
 
-## Why this workflow
+</div>
 
-Today's AI coding tools default to putting everything into one ever-longer chat. Context windows are indeed growing, but the failure modes of delivery are not caused by windows being too small — they are properties of the "one long chat does everything" form itself, and a bigger model does not remove them:
+---
 
-| Failure mode of the long chat | Kaiming's answer |
-|---|---|
-| **Context drift**: restatements of early facts become unreliable, or the model confidently invents decisions that were made | **Facts live in files**: specs, Plans, reports and knowledge are project files; sessions load the current documents on demand instead of inheriting a possibly-drifted memory |
-| **Self-review**: development and checking share one context, so "looks right" gets announced as done | **Structural independence**: review and test are separate Sessions with separate context; they read real files and run results, not the developer's self-assessment |
-| **Nobody resumes**: closing the page loses progress; after a restart, nobody knows what finished | **Resident Server + fact checks**: execution is separate from viewing; recovery works from the database and actual files, not replay |
-| **Scope drift**: things done in passing quietly expand the delivery | **Explicit gates**: a backlog item exists only when the user asks for it, and delivery starts only when the user says so; new findings start as suggestions |
-| **Nowhere to hand over**: conclusions are scattered in chat, and the next session starts from zero | **Settlement writes back**: when a Task ends, the spec implementation state, closed backlog items, module knowledge and verification entry points are written into the project |
+<div align="center">
 
-Each design decision answers a concrete failure mode; roles exist for responsibility and context, not to mirror a human org chart. Kaiming is designed around these long-lived facts, not around one model's context window: the user owns goals and trade-offs, agents organize work within the authorized scope, and the host persists facts and checks required results.
+![Kaiming 70s Product Walkthrough: From Single-Chat Chaos to Disciplined Engineering Delivery](docs/assets/kaiming-intro.en.gif)
 
-## First principles
+<sub>🎬 <b>70s Animated Product Walkthrough</b> (HD MP4 Video: <a href="docs/assets/kaiming-intro.en.mp4">docs/assets/kaiming-intro.en.mp4</a> · Hand-drawn Architecture Overview: <a href="docs/assets/kaiming-overview-gpt-image.en-v3.png">PNG</a> / <a href="docs/assets/kaiming-overview.en.svg">Vector SVG</a>)</sub>
 
-### 1. Project facts belong to the project, not to a chat
+</div>
 
-Model context is compressed, truncated, lost, or simply restated incorrectly — not as an occasional bug, but as an inherent property of long context. Specs, Plans, reports, project knowledge and actual code must live in files. Tasks, inputs, phases, interactions and report references must live in durable records. Chat is an interface, not the source of truth.
+---
 
-Documents are also the input for sessions: each specialist Session assembles its context from the relevant documents, not from a long chat that may have drifted. The decision in the document is the only version that happened; a restatement in chat is not.
+## 💡 Why Kaiming?
 
-### 2. Execution and viewing are separate
+Modern AI coding agents can already write great code, yet most tools default to stuffing everything into **one ever-growing chat transcript**. When you drive a real software project across multiple days and iterations, the structural flaws of a single long chat surface—and a larger context window does not fix them:
 
-The browser is one client for observing and controlling the workbench. The resident Server does the work. Closing the page, switching browsers or losing the network must not terminate an in-progress Task. Conversely, when the Server stops, execution stops: "the page is still open" must never be mistaken for "the task is still running."
+| Failure Mode of a Single Long Chat | Kaiming's Engineering Guardrail |
+| :--- | :--- |
+| **Context Drift**: Earlier decisions get compressed away or confidently misremembered later in the thread | **Facts on Disk (`.dev/`)**: Specs, Plans, backlog items, and reports live as real project files; each new Session assembles current documents on demand instead of inheriting drifted chat memory |
+| **Grading Its Own Homework**: The same agent writes the code and declares "all checks passed" in one context | **Structural Independence**: Review and Test run in fresh, isolated Sessions that inspect real files, Git diffs, and runtime evidence—**they never read the developer's chat transcript** |
+| **Scope Creep & Shortcuts**: Silently editing unrelated files or skipping design/testing to show quick output | **Read-Only Chief + Host Hard Gates**: The Chief has no file-write or arbitrary shell-write permissions and must create a Task to dispatch specialists; the host verifies delivery snapshots, review coverage, and Git commits before closing |
+| **Tab Closed = Progress Lost**: Refreshing the browser or losing network drops the run, with no clear way to resume | **Resident Server + Fact-Based Recovery**: Execution is decoupled from viewing; Tasks keep running when the browser closes, and restarts reconcile SQLite state against actual files on disk without replaying unknown side effects |
+| **Amnesia After Delivery**: Code changes land, but specs and backlog stay stale—forcing the next session to start from scratch | **Mandatory Settlement (`settler`)**: Every Task finishes by updating spec implementation status, closing delivered backlog items, archiving reports, and committing to Git |
 
-### 3. Humans own goals; agents execute
+---
 
-A backlog item exists only when the user explicitly asks to record it. Delivery starts only when the user explicitly says to implement it. Newly discovered work is a suggestion until the user expands scope. Authorization, pause, cancel and important trade-offs belong to the user; the chief explains, organizes and executes.
+## ✨ How It Works
 
-### 4. Independence comes from structure, not from asking a model to review itself
+Kaiming is neither an autocomplete plugin nor a rigid workflow DSL. It connects your local repositories to a **self-hosted resident workbench** designed around three outcomes: **the work gets done, the project remembers, and you can always pick up next time**.
 
-Review and test use separate Sessions, separate context and real evidence, not the developer agent claiming success in its own chat. Independent context is not just a different perspective: a session that loads facts from documents has no memory to confuse — it never joined the developer's chat, so it neither vouches for the developer nor repeats conclusions that may have drifted there. The smaller and more purpose-built the context, the fewer places hallucination can hide.
+### 1. Two-Track Collaboration: Free Exploration vs. Controlled Delivery
 
-An agent's completion report is not completion; the host checks identity, state, required reports, actual artifacts and persisted results.
-
-### 5. Failure is normal, not an edge case
-
-Models time out, processes crash, persistence can be uncertain, and users pause work. The reliable approach is to persist inputs and facts before execution; recover work that is recoverable; keep "execution outcome unknown" for operations that cannot be confirmed; and never replay unknown work or fake success.
-
-### 6. Build fewer objects; prefer existing mechanisms
-
-An installation has one Server, one SQLite database and a Pi runtime with independent Sessions. Tasks are only read or write. Specialist roles use the same Session machinery. We do not add one process per project, a workflow DSL, extra approval objects or a distributed scheduler without a concrete need.
-
-## Product model
+You always collaborate with a **Chief** agent, with an explicit authorization boundary between discussion and execution:
 
 ```text
-Installation
-└── Project (a real directory; not copied)
-    ├── Chief Session (one topic / collaboration thread)
-    │   └── Task (one current delivery objective)
-    │       ├── Overall Plan
-    │       ├── Phases (analysis / design / plan / develop / review / test / settle)
-    │       └── Specialist Sessions (investigate, design, develop, review, test, settle)
-    ├── Backlog (things to do later, directly editable)
-    ├── Specs (behavior, acceptance points, implementation state)
-    └── Project knowledge (modules, evidence, implementation and verification entry points)
+[Track A: Exploration & Planning]  Free Discussion / Investigation ──("Record this")──► .dev/backlog.md (Backlog)
+                                                                   ──("Design first")─► Design Task (Module Map + Specs + Slices, confirmed by you)
+
+[Track B: Controlled Delivery]     "Implement B-12" or a direct delivery goal
+                                    └──► Implementation Task: Overall Plan (Verification Profile + Acceptance)
+                                         ├── 1. Develop (Developer Session)  → Write code & focused self-checks
+                                         ├── 2. Review  (Reviewer Session)   → Isolated context checks specs, invariants & negative controls
+                                         ├── 3. Test    (Tester Session)     → Isolated context runs real tests & browser/API verification
+                                         └── 4. Settle  (Settler Session)    → Updates spec state, closes backlog, writes settlement & Git commit
 ```
 
-| Object | Meaning |
-|---|---|
-| **Project** | An existing project directory selected by the user. The workbench records its path and ownership; it never copies the project. |
-| **Chief Session** | The collaboration context between the user and the chief. It advances at most one unfinished Task at a time; other topics get a new session. |
-| **Task** | One delivery objective with a goal, overall Plan, phases and completion conditions. |
-| **Specialist Session** | The context of one specialist agent in a phase, with independent history, tool permissions and review. |
-| **Backlog** | The project backlog file: id, title, state; optional body and spec references. |
-| **Spec** | A module spec: behavior, exceptions, acceptance points, implementation state and unknowns. |
-| **Result/Report** | The formal result a specialist Session actually delivered, stored in the project or the server workspace with a recorded reference. |
+- **No Unsolicited Scope Expansion**: Nothing is added to the backlog unless you ask to record it; no code is changed unless you authorize implementation.
+- **Bounded Verification Profiles**: Every code or UI Plan declares an explicit verification profile (`visual` for copy/pure styling, `focused` as an upper bound for local behavior changes, or `broad` for shared contracts), preventing both under-testing and runaway full-suite noise on small changes.
 
-![Kaiming hand-drawn overview: chief, specialist roles, independent contexts, different models, document consistency and the end-to-end project flow](docs/assets/kaiming-overview-gpt-image.en-v3.png)
+### 2. Role-Isolated Contexts & Multi-Model Assignment
 
-<sub>Hand-drawn overview generated with the local Codex gpt-image-2 tool; text-exact version: [SVG](docs/assets/kaiming-overview.en.svg).</sub>
+Kaiming provides 6 specialist roles under the Chief. **Each role runs in its own isolated Session history with strict tool boundaries and an independently configurable model**:
 
-**One shared memory, separate sessions.** The chief Session and each specialist Session have independent context and history, but they share the same data directory, project facts and Task/report records. Switching sessions does not switch project memory.
+| Role | Responsibility & Deliverable | Context & Permission Boundary |
+| :--- | :--- | :--- |
+| **Chief (`chief`)** | Collaborates with the user, clarifies goals, authors the Task Plan, orchestrates phases | Read-only file access + allowlisted read-only Git inspector (`inspect`); **no file-write or write-shell access** |
+| **Investigator (`investigator`)** | Explores the codebase, diagnoses root causes, maps current behavior | Read-only toolset; produces structured investigation reports |
+| **Designer (`designer`)** | Authors/updates product specs (`.dev/product/`) and technical designs (`.dev/technical/`), splits ready backlog slices | Writes only spec and design documents within a Design Task |
+| **Developer (`developer`)** | Implements code per Plan and specs, runs focused unit/TDD checks | Full project file read/write, test execution, browser tools, and `codemode` |
+| **Reviewer (`reviewer`)** | Performs falsification-oriented code & spec review (`passed` / `needs_fix`) | **Isolated Session; never reads developer chat**; binds every changed deliverable file |
+| **Tester (`tester`)** | Runs independent verification (including mandatory falsifiable Negative Controls) | **Isolated Session; never reads developer chat**; verifies via real execution and browser evidence |
+| **Settler (`settler`)** | Updates spec implementation status, closes delivered backlog items, writes settlement report, creates Git commit | Single writer for documentation close-out and version control |
 
-**Different models.** Models are configured per role or project and fixed for a run. Design, development, Review and Test can use different models; independence comes from separate context, responsibilities and real evidence, not from changing the model alone.
+> **Mix and Match Models per Role**: Assign a strong reasoning planner to `chief` / `designer`, a fast coding model to `developer`, and a different vendor's model to `reviewer`—eliminating blind spots across both context and model families.
 
-## The resident process
+### 3. Documents as Durable Project Memory (`.dev/` Layout)
 
-### What an instance is
-
-One Kaiming instance consists of:
+Kaiming never clones or copies your repository. Instead, it maintains structured engineering memory directly inside your project directory:
 
 ```text
-one data directory + one resident Server process + any number of project directories
+your-project/
+├── .dev/
+│   ├── backlog.md                  # Project backlog (ready / idea / done / dropped)
+│   ├── product/                    # Product specs (module map, behavior contracts, acceptance, implementation state)
+│   ├── technical/                  # Technical design (architecture boundaries, interfaces, verification entry points)
+│   └── work/<taskId>/              # Full traceable dossier for each Task
+│       ├── plan.md                 # Overall Plan (goal, scope, verification profile, acceptance criteria)
+│       └── <sessionId>/            # Formal specialist reports and settlement.md
+└── src/                            # Your actual project source code
 ```
 
-The Server is responsible for:
+When you open a new session days later, agents load the current module map, spec implementation state, and backlog from `.dev/` on demand—no need to re-explain your architecture.
 
-- accepting inputs from browsers and external agents;
-- persisting inputs, Tasks, interactions and reports;
-- scheduling independent Pi Sessions that run models and tools;
-- providing live progress to browsers over HTTP/SSE;
-- exposing `/mcp` on the same process, or letting a stdio MCP process attach to it;
-- performing recovery checks at startup and during operation.
+### 4. Resident Server & Honest Recovery
 
-A project directory is just a working directory that was opened. The data directory stores execution records. They must not be mixed.
+- **Closing the Browser ≠ Stopping Work**: The browser is purely an observation and control client. The resident Node.js Server continues driving Tasks in the background; reconnect anytime to inspect progress or answer pending agent questions.
+- **Honest Crash Recovery**: After a server restart, completed phases, Session histories, and user decisions remain intact. In-flight operations whose boundary cannot be confirmed are honestly marked `interrupted` for verification—never faked as successful or blindly replayed.
+- **Dirty-Workspace Baseline Isolation**: When a Task starts, Kaiming snapshots pre-existing uncommitted files (`dirtyBaseline`) so unrelated local edits neither pollute delivery checks nor get wiped by cleanup gates.
 
-### Closing the browser does not stop work
+### 5. Dual Entry Points: Web Workbench & External Agents (MCP)
 
-When the browser closes, refreshes or loses its connection:
+Alongside the built-in Web Workbench (5-column project board, live terminal stream, unified `FileViewer` canvas for files and reports, per-role model & thinking-level settings, token usage analytics), Kaiming natively exposes **stdio MCP** and a resident **`/mcp` HTTP endpoint**:
 
-- the Server and an in-progress Task can continue;
-- the relationship between the chief waiting and specialist Sessions is persisted;
-- reopening the page or switching browsers restores the view from snapshots, history and Task records;
-- questions that need a user answer remain available, and can still be answered after reconnecting.
+- Delegate tasks to Kaiming directly from **Claude Code, Codex, Cursor, Antigravity**, or any MCP-capable coding assistant;
+- External MCP delegations share the **exact same resident Server, SQLite source of truth, fixed project session, and delivery gates** as the browser UI—kick off work from your CLI and watch the phases, reviews, and reports live in the browser.
 
-Execution stops when the Server process stops, or when the user explicitly pauses or cancels the Task. **The resident process is what keeps work moving**; it is not decoration.
+---
 
-### What restart recovers
-
-Restarting the Server does not "run everything again." Recovery is a fact check:
-
-- Tasks, Session history, phases, reports and decisions already made by the user are kept;
-- unfinished inputs from the previous process are scanned and execution whose boundary cannot be confirmed becomes `interrupted` or awaiting verification;
-- phases that completed successfully are not redone;
-- the original tool stack is not revived, no fake ToolResult is written, and unknown operations are not automatically replayed;
-- to continue, the chief submits new remaining work based on real records and the actual files.
-
-In short: **a closed page can continue and a restarted process can resume, but nobody can recreate an in-memory call that no longer exists.**
-
-### Keeping it running
-
-The current start script runs a long-lived foreground process. It does not install systemd, launchd or a container service:
-
-```bash
-./scripts/start.sh
-```
-
-For production, let the host environment supervise it:
-
-- **systemd / launchd**: write a user service whose `ExecStart` points to `scripts/start.sh`;
-- **tmux / screen**: convenient on a personal machine;
-- **a container or orchestrator**: persist the data directory and `.env`, and ensure only one instance writes to that data directory.
-
-Do not start multiple Servers against the same data directory. An MCP stdio process attaches to an existing instance first; it must not become a second owner of the database.
-
-## How a piece of work flows
-
-1. The user opens a project and discusses its current state and goal with the chief.
-2. When the user says "record it", a backlog item is created; it only records future work and starts nothing.
-3. The user says "implement B-12" or gives a development goal directly. The chief checks whether the specs are enough to write observable acceptance; if not, design runs first and produces specs plus a slice list the user confirms.
-4. The chief creates a Task. The Plan must first state acceptance (from the specs or a user decision) and scope; then specialist Sessions are dispatched for the current step.
-5. Review or test findings return to the same Task; independent Sessions re-check the work.
-6. Once completion conditions hold, settlement updates the spec implementation state, closes finished backlog items, records remaining issues as new backlog items, and stores the result and report.
-7. Later, the user reopens the project and sees the real state of the same Task instead of explaining the goal again.
-
-## Document consistency and settlement
-
-Kaiming is document-first, not transcript-first. Specs, design, the overall Plan, reports, project knowledge and verification entry points are project facts: they determine what the next session can read, and whether a delivery is actually complete.
-
-- **Phase changes**: when the chief updates the current phase and results, the affected specs, navigation, knowledge or verification entry points are maintained together; documents must not be left at an old state.
-- **Settlement is not just code**: settlement includes documentation close-out: the spec implementation state, closed backlog items, module knowledge, code/test entry points, verification report, uncovered items and open issues all need a landing place.
-- **Consistency comes from actual files**: Review/Test read real documents, code and reports; they do not treat the chief's narrative or a chat summary as project fact.
-- **Handover is document-based**: sessions have independent context, but hand over through the same documents, spec references and Task records. A new session reads what it needs instead of re-explaining the whole project.
-
-The host verifies identity, state, required reports, versions and actual saves. Whether the documents are complete and meet the goal is still judged by the chief and independent agents.
-
-## What it does
-
-- **Chief conversation**: free discussion, project investigation and clarification. Only an explicit request records a backlog item; only explicit implementation starts delivery.
-- **Backlog and design**: record what may be done later; design agents produce specs and a slice list, which the user confirms before implementation.
-- **Controlled delivery**: the chief writes an overall Plan and organizes development, independent review, independent test and settlement. Phases do not advance silently.
-- **Specialist Sessions**: role-isolated context; multiple members can work in parallel in one phase, with waiting, pause, resume and restart continuity recorded.
-- **Project memory**: backlog items, specs, code and verification entry points are updated as work progresses; a new session does not need the whole project explained again.
-- **External agent access**: Codex, Claude Code, Grok and other agents can delegate work through MCP and see the same session, Tasks and reports in the browser.
-- **Single machine, single user**: one Server manages multiple projects and chief sessions; data is local and model credentials do not enter the conversation.
-
-## Design trade-offs
-
-| Trade-off | Choice | Why |
-|---|---|---|
-| One process per project vs one global Server | One global Server | Projects, sessions, Tasks and interactions need one source of truth; MCP and the browser see the same work. |
-| Browser execution vs Server execution | Server execution | Closing the page, switching browsers or losing connectivity must not kill the work. |
-| Custom workflow DSL vs roles + Sessions + Tasks | Existing Sessions/Pi + Tasks | Complex work needs model judgment; a fixed DSL turns human decisions into hard-coded steps. |
-| Trust the model's claim of completion vs host verification | Persisted state, reports and evidence | A linguistic claim cannot replace actual files, tests and runtime results. |
-| One long chat vs multiple specialist Sessions | Independent Sessions | Context isolation and clear responsibility; Review/Test never read the developer's self-review. |
-| Replay unknown operations vs keep them for verification | Keep and verify before continuing | Unknown side effects cannot be treated as if they never happened, and must not be repeated automatically. |
-| Team SaaS vs single-user self-hosting | Single user, local, self-hosted | The scope is explicit; start by making one person's project deliverable continuously. |
-
-## Not in scope
-
-The current version does not provide team accounts, RBAC, multi-tenant hosting, scheduled jobs, production release automation or a general project-management suite. It does not treat the browser or a model as durable truth. Agent `bash` runs with the system user's permissions and is not an OS sandbox.
-
-## Architecture
+## 🏗️ Architecture
 
 ```text
-Browser ── HTTP / SSE ──┐
-                       ├── resident Node Server
-External agent ── MCP ─┘        │
-                                ├── SQLite (projects, sessions, inputs, Tasks, reports, interactions)
-                                ├── Pi native session history (JSONL)
-                                ├── independent specialist Sessions / model loops
-                                └── your project directories (never copied)
+  Browser Web Workbench ─── HTTP / SSE ───┐
+  (Board / Chat Stream / FileViewer)      │
+                                          ▼
+  External Coding Agents ── stdio / /mcp ─► Resident Node.js Server (Single instance, multi-project)
+  (Codex / Claude Code / ...)             │
+                                          ├── SQLite WAL (Projects, Sessions, Tasks, Phases, Interactions, Reports)
+                                          ├── Pi Native Session History (Isolated Session JSONL + Role Toolsets)
+                                          ├── Host Completion Gates (Plan Contract, Dirty Baseline, Review Binding, Git Check)
+                                          └── Your Local Project Directories (Worked on in-place, never copied)
 ```
 
-The browser only displays state and sends user actions. The Server persists inputs, schedules agents and records results. External agents use the same Server and the same tools; they do not follow a second set of business rules.
+---
 
-## Requirements
+## 🚀 Quick Start
 
-- macOS or Linux (POSIX). The current implementation uses `node:sqlite` and POSIX path guards; Windows is unverified.
-- Node.js **24 LTS**. 24.22.1+ is recommended; earlier 24.x may run, but `officeparser` can print an engine warning.
-- An OpenAI-compatible, Anthropic or local model endpoint with an API key.
-- No Docker and no global Kaiming installation.
+### 1. Requirements
 
-## Quick start
+- **OS**: macOS or Linux (POSIX)
+- **Node.js**: **24 LTS** (`24.22.1+` recommended; uses built-in `node:sqlite`—no Docker or external database required)
+- **Model Endpoint**: Any OpenAI-compatible API, Anthropic API, or local model server (OpenAI, Claude, DeepSeek, etc.)
+
+### 2. One-Command Setup & Launch
 
 ```bash
 git clone <repository-url>
@@ -227,112 +148,91 @@ cd <repository-directory>
 ./scripts/start.sh
 ```
 
-`setup.sh`:
+`setup.sh` installs server and webapp dependencies, builds the static frontend (`kaiming/web-static`), generates a random access password in `kaiming/.env` (mode `600`, gitignored), and prints the local URL and login password.
 
-1. installs server and webapp dependencies;
-2. builds the browser shell (`kaiming/web-static`);
-3. creates a random access password and local configuration in `kaiming/.env` (mode 600, gitignored);
-4. prints the URL and password.
+### 3. Sign In & Configure Models
 
-Open `http://127.0.0.1:4173` and sign in with the password.
+1. Open **`http://127.0.0.1:4173`** in your browser and sign in with the printed password (also stored as `KAIMING_ACCESS_PASSWORD` in `kaiming/.env`).
+2. Go to **Settings → Models**, add your model provider (Base URL, API protocol, API Key, and Model ID), and select a default model. You can also assign distinct models and thinking levels per specialist role.
+3. Open your local project directory and start collaborating with the Chief.
 
-Then open **Settings → Models**, add a provider, model id and API key, and choose a default model. Before that, projects, backlog items and history are readable, but inputs are not executed by a model.
+---
 
-Restart later with:
+## 🛠️ Everyday Operations & MCP Setup
+
+### Common Commands
 
 ```bash
+# Start the resident Server (use tmux, systemd, or launchd for long-running background service)
 ./scripts/start.sh
-```
 
-## Where things live
-
-| Content | Default location | Notes |
-|---|---|---|
-| Program code | Any directory; no global install | Clone the repo and run `scripts/setup.sh` |
-| Startup config | `kaiming/.env` | Password, port and data directory; gitignored |
-| Runtime data | `kaiming/.kaiming-data/` | SQLite, session history, attachments, model credentials; override with `KAIMING_DATA_DIR` |
-| Browser build | `kaiming/web-static/` | Generated, not committed; `setup.sh` creates it |
-| Your projects | Any local directory | The workbench records the path only; never place a project inside the data directory |
-
-For manual installation, environment variables, model credentials, backup/restore, MCP configuration and troubleshooting, see **[docs/install.en.md](docs/install.en.md)**.
-
-## Everyday operations
-
-```bash
-./scripts/start.sh                 # start the resident Server
-# Ctrl-C stops it
-
-# Backup: stop the workbench, then copy the data directory
+# Back up runtime data (stop the server first; treat the archive as a secret since it holds credentials)
 tar -czf kaiming-backup-$(date +%Y%m%d).tgz -C kaiming .kaiming-data
 
-# Upgrade
-git pull
-./scripts/setup.sh
-./scripts/start.sh
+# Upgrade (preserves existing .env and .kaiming-data; schema migrations run automatically on startup)
+git pull && ./scripts/setup.sh && ./scripts/start.sh
 ```
 
-The data directory contains model credentials and session history; treat backups as secrets. Back up project directories separately.
+### Connect Claude Code / Codex via MCP
 
-## Development
+Add `kaiming` to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "kaiming": {
+      "command": "node",
+      "args": ["/absolute/path/to/repo/kaiming/src/mcp/main.ts"],
+      "env": {
+        "KAIMING_ACCESS_PASSWORD": "<same password as kaiming/.env>",
+        "KAIMING_DATA_DIR": "/absolute/path/to/repo/kaiming/.kaiming-data",
+        "KAIMING_MCP_PROJECT": "/absolute/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+> The `stdio` process attaches to an already-running Kaiming Server first, or boots one if none is active. For environment variables, multi-project `/mcp` HTTP setup, and troubleshooting, see **[Installation & Operations](docs/install.en.md)** and **[MCP Service Contract (Chinese)](docs/technicalnew/mcp-service.md)**.
+
+---
+
+## 🔒 Security & Scope Boundaries
+
+- **Localhost by Default**: Listens only on `127.0.0.1:4173` out of the box. If you expose it remotely, put it behind a reverse proxy with HTTPS and access control.
+- **Role Isolation & Destructive-Command Confirmation**: File tools are strictly jailed to the active project directory (the workbench's private data directory is off-limits); the Chief has no file-write or write-shell access; specialist destructive shell commands (`rm`, `git reset --hard`, etc.) require explicit user confirmation in the browser.
+- **Not an OS Sandbox**: Specialist `bash` runs with the permissions of the OS user that launched Kaiming. Do not run untrusted third-party repositories without OS/container isolation.
+- **Focused Single-User Workbench**: Built for individual developers and hands-on technical leads. Multi-tenant SaaS, team RBAC, and automated production deployment pipelines are out of scope.
+
+---
+
+## 📚 Documentation & Development
+
+| Document | Description |
+| :--- | :--- |
+| **[Installation & Operations (`docs/install.en.md`)](docs/install.en.md)** | Requirements, manual setup, model configuration, env vars, backup/restore, and troubleshooting |
+| **[Documentation Index (`docs/INDEX.md`)](docs/INDEX.md)** | Entry point to all product requirements, technical contracts, verified baseline, and roadmap (Chinese) |
+| **[Product Overview (`docs/productnew/README.md`)](docs/productnew/README.md)** | The six business modules, core domain model, and end-to-end delivery lifecycle (Chinese) |
+| **[User Journeys (`docs/productnew/journeys.md`)](docs/productnew/journeys.md)** | Greenfield setup, existing-repo onboarding, design slicing, delivery, and MCP delegation flows (Chinese) |
+| **[Technical Design (`docs/technicalnew/README.md`)](docs/technicalnew/README.md)** | Architecture diagrams, role & tool contracts, runtime recovery, and UI contracts (Chinese) |
+| **[Development Rules (`AGENTS.md`)](AGENTS.md)** | Contributor workflow, verification profiles (`visual` / `focused` / `broad`), and settlement lessons |
+
+### Local Development & Verification
 
 ```bash
 cd kaiming
-npm ci
-npm --prefix webapp ci
+npm ci && npm --prefix webapp ci
 npm run build
-npm start
 
-npm test                # server unit/integration tests
-npm --prefix webapp test
-npm run typecheck
+npm test                         # Server unit & integration suite
+npm --prefix webapp test         # Frontend component & state suite
+npm run typecheck                # Server TypeScript check
 npm --prefix webapp run typecheck
-npm run test:browser    # real Chromium + real server process + stub model
+npm run test:browser             # Playwright real Chromium + real server E2E suite
 ```
 
-Real-model checks:
+---
 
-```bash
-cd kaiming
-cp config/model.example.json config/model.json   # fill provider/model/key
-npm run check:model
-npm run check:runtime
-```
+## 📄 License
 
-`config/model.json` is only for check scripts and is gitignored; the server's model configuration comes from Settings or `models.json` in the data directory.
-
-## External agent access
-
-The workbench provides stdio MCP and a resident `/mcp` endpoint. Codex, Claude Code, Grok and similar clients can delegate work to the same Task and see the same progress in the browser.
-
-- Local stdio: the client starts a child process that attaches to an existing Server, or starts one if none is running;
-- Resident HTTP: clients connect to the same Server and share the same work records;
-- Each project has one fixed session; run identifiers remain queryable after restart;
-- Authentication and details: [MCP service (Chinese)](docs/technicalnew/mcp-service.md).
-
-## Security boundaries
-
-- By default it listens only on `127.0.0.1`. Do not expose the port directly to the internet; for remote access add a reverse proxy, TLS and access control.
-- The login password is in `kaiming/.env`; model keys live in the data directory or Settings. Never commit either.
-- Agent `bash` has the same permissions as the system user that started the workbench. This is not an OS-level sandbox; do not use it on untrusted code or grant it unnecessary privileges.
-- File tools (read, write, edit, search) may only reach the project directory. `bash` is not path-restricted, but destructive commands (`rm`, `git reset --hard`, …) ask you to confirm in the browser every time.
-- Do not place projects inside the data directory: file tools treat private storage as inaccessible, which would block the whole project.
-- Single-user only. Team accounts, RBAC and managed hosting are out of scope.
-
-## Documentation
-
-- [Installation and setup](docs/install.en.md)
-- [Product overview (Chinese)](docs/productnew/README.md) / [User journeys (Chinese)](docs/productnew/journeys.md)
-- [Technical design (Chinese)](docs/technicalnew/README.md)
-- [External agent access / MCP (Chinese)](docs/technicalnew/mcp-service.md)
-- [Product acceptance (Chinese)](docs/productnew/acceptance.md)
-- [Documentation index (Chinese)](docs/INDEX.md)
-
-The detailed product and technical design documents are currently Chinese. This English README and the English install guide cover onboarding and operations.
-
-## Contributing
-
-Read [AGENTS.md](AGENTS.md) and [delivery (Chinese)](docs/productnew/modules/delivery.md) before changing code. Code or presentation Tasks must declare a verification profile (`visual` / `focused` / `broad`). A passing test suite is not product acceptance.
-
-## License
-
-Released under the [MIT License](LICENSE). You may use, modify, distribute and sell the software, provided the copyright and license notice are retained. The software is provided "as is", without warranty.
+Released under the [MIT License](LICENSE). Free for personal and commercial use, modification, and distribution with copyright and license notices retained.

@@ -6,3 +6,5 @@ web-static/
 state.db
 start.sh
 .start.sh.swp
+# A zero-byte file made by pointing sqlite3 at a missing path; the real store is .kaiming-data/state.db.
+.kaiming/kaiming.db
