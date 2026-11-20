@@ -120,3 +120,75 @@ describe('deletion command detection', () => {
     expect(deletionCommandReason('echo `rm notes.md`')).toBeDefined();
   });
 });
+
+describe('chief history/worktree gate', () => {
+  it('leaves the default table unchanged for commit, history and worktree-discard commands', () => {
+    for (const command of [
+      'git commit -m done',
+      'git -C repo commit --amend',
+      'git merge feature',
+      'git rebase main',
+      'git cherry-pick abc123',
+      'git push --force origin main',
+      'git reset --hard HEAD~1',
+      'git checkout -- src/app.ts',
+      'git restore src/app.ts',
+    ]) {
+      expect(deletionCommandReason(command), command).toBeUndefined();
+    }
+  });
+
+  it('asks before the chief would commit, rewrite or discard the project', () => {
+    for (const command of [
+      'git commit -m done',
+      'sudo git commit --amend',
+      'git -C repo commit',
+      'git -c user.name=Test commit -m done',
+      'git merge feature',
+      'git rebase main',
+      'git cherry-pick abc123',
+      'git push --force origin main',
+      'git -c core.pager=cat push --force origin main',
+      'git push -f origin main',
+      'git push --force-with-lease origin main',
+      'git reset --hard HEAD~1',
+      'git checkout -- .',
+      'git checkout -- src/app.ts',
+      'git checkout .',
+      'sudo git checkout .',
+      'git restore src/app.ts',
+      'echo $(git reset --hard)',
+      'echo `git reset --hard`',
+      'echo $(git push -f)',
+      'echo $(git checkout .)',
+      'echo `git checkout .`',
+    ]) {
+      expect(deletionCommandReason(command, { guardHistory: true }), command).toBeDefined();
+    }
+  });
+
+  it('keeps read-only and normal git commands quiet under the chief gate', () => {
+    for (const command of [
+      'git status',
+      'git log --oneline -5',
+      'git diff --stat',
+      'git show HEAD',
+      'git fetch origin',
+      'git push origin main',
+      'git reset --soft HEAD~1',
+      'git checkout main',
+      'git checkout -b feature',
+      'git merge-base HEAD main',
+      'git commit-tree abc123',
+    ]) {
+      expect(deletionCommandReason(command, { guardHistory: true }), command).toBeUndefined();
+    }
+  });
+
+  it('does not treat a quoted or remote git word as a local command', () => {
+    // This is a text gate, not a shell parser: the audit covers a local HEAD/status change; an ssh
+    // command is remote work and deliberately outside the local project fingerprint.
+    expect(deletionCommandReason(`echo 'git commit -m done'`, { guardHistory: true })).toBeUndefined();
+    expect(deletionCommandReason(`ssh host 'git commit -m done'`, { guardHistory: true })).toBeUndefined();
+  });
+});

@@ -1,7 +1,8 @@
 /**
- * The chief's inspector is the replacement for `bash` (P0-4). These tests assert the property that
- * makes the replacement meaningful: the argument table is fixed, model input cannot become a flag
- * or an escaping path, and a real git repository answers without being modified.
+ * The chief's fixed-argv Git inspector (P0-4), still the structural read-only path alongside its
+ * observation shell. These tests assert the property that makes it meaningful: the argument table
+ * is fixed, model input cannot become a flag or an escaping path, and a real git repository answers
+ * without being modified.
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';

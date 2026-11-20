@@ -40,9 +40,10 @@ const CODEMODE_TOOL = 'codemode';
 /** Native tool sets exactly as the contract documents them. */
 const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
   // The chief checks the real state itself (git status/log/diff, file layout) instead of trusting a
-  // summary. It has no shell and no write tool: inspection is `inspect`, implementation and the
-  // settlement commit belong to the delegated roles.
-  chief: [...READ_TOOLS, INSPECT_TOOL],
+  // summary. It has a shell for observing and operating the environment (ssh, containers, ports,
+  // logs, ignored local env files), but no write/edit: tracked project changes and the settlement
+  // commit belong to the delegated roles. The host audits each shell call (shell-audit.ts).
+  chief: [...READ_TOOLS, SHELL_TOOL, INSPECT_TOOL],
   // Document work includes moving and deleting files (archive, rename, remove a duplicate body):
   // Pi has no rm/mv tool, so the shell is the native way to do it.
   designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],

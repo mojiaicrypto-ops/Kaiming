@@ -375,7 +375,7 @@ describe('input runner', () => {
     expect(runningHandle?.session.getActiveToolNames() ?? []).toEqual(
       expect.arrayContaining(['inspect', 'backlog', 'project']),
     );
-    expect(runningHandle?.session.getActiveToolNames() ?? []).not.toContain('bash');
+    expect(runningHandle?.session.getActiveToolNames() ?? []).toContain('bash');
 
     const task = h.store.createTask({
       id: 't-reuse',
@@ -1050,9 +1050,9 @@ describe('input runner', () => {
     const requested = shape.requestedTools as string[];
     const active = shape.activeTools as string[];
     expect(requested).toContain('read');
-    // The chief checks the real state itself, but carries neither a shell nor project-writing tools.
+    // The chief checks the real state itself and keeps an observation shell, but has no write/edit.
     expect(requested).toContain('inspect');
-    expect(requested).not.toContain('bash');
+    expect(requested).toContain('bash');
     expect(requested).not.toContain('write');
     expect(requested).not.toContain('edit');
     // Only registered names really activate; the record shows both.
@@ -1097,6 +1097,94 @@ describe('input runner', () => {
     expect(JSON.stringify(results[0])).toContain('chief-probe.ts');
     // A write flag is not expressible: the revision is rejected before git runs.
     expect(JSON.stringify(results[1])).toContain('rev must be a revision name');
+  }, 30_000);
+
+  it('audits a chief bash that changes a tracked file, and lets a read-only command through', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            { name: 'bash', arguments: JSON.stringify({ command: 'printf "changed\\n" >> base.ts' }) },
+          ],
+        },
+        { kind: 'text', text: 'edited' },
+        {
+          kind: 'tool_calls',
+          calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'git status --short' }) }],
+        },
+        { kind: 'text', text: 'checked' },
+      ],
+    });
+    const git = (...args: string[]): void => {
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
+        { cwd: h.cwd, stdio: 'ignore' },
+      );
+    };
+    git('init', '--quiet');
+    writeFileSync(join(h.cwd, 'base.ts'), 'export const base = 1;\n');
+    git('add', '--all');
+    git('commit', '--quiet', '-m', 'base');
+
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    let results = (h.registry.get('s-1')?.session.messages ?? []).filter(
+      (message) => message.role === 'toolResult',
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]?.isError).toBe(true);
+    expect(JSON.stringify(results[0]?.content)).toContain('chief shell audit');
+    expect(JSON.stringify(results[0]?.content)).toContain('base.ts');
+
+    accept(h.store, 'i-2', 'req-2');
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    results = (h.registry.get('s-1')?.session.messages ?? []).filter(
+      (message) => message.role === 'toolResult',
+    );
+    expect(results).toHaveLength(2);
+    expect(results[1]?.isError).toBe(false);
+    expect(JSON.stringify(results[1]?.content)).not.toContain('chief shell audit');
+  }, 30_000);
+
+  it('asks the chief before a shell commit, and honors a refusal', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'git commit -m test' }) }],
+        },
+        { kind: 'text', text: 'did not commit' },
+      ],
+    });
+    const answering = (async () => {
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        const question = h.store.listPendingInteractions('s-1')[0];
+        if (question !== undefined) {
+          h.store.resolveInteraction({
+            interactionId: question.interactionId,
+            expectedRevision: question.revision,
+            response: 'Reject',
+            answeredBy: 'test',
+            requestKey: `answer:${question.interactionId}`,
+          });
+          expect(h.runner.interactions.resolve(question.interactionId, 'Reject')).toBe(true);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('the chief history gate never asked');
+    })();
+
+    const outcome = await h.runner.runNext('s-1');
+    await answering;
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.listPendingInteractions('s-1')).toHaveLength(0);
+    const results = (h.registry.get('s-1')?.session.messages ?? []).filter(
+      (message) => message.role === 'toolResult',
+    );
+    expect(JSON.stringify(results)).toContain('the user declined');
   }, 30_000);
 
   it('refuses a model file read outside the project as a tool result', async () => {
@@ -2528,8 +2616,8 @@ describe('input runner', () => {
     h.store.controlTask({ taskId: task.id, command: 'pause' });
     accept(h.store, 'i-2', 'req-2', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
-    // The chief has no shell at all now; the hold withholds the domain tools that can write the
-    // project, while the read-only inspector stays as the honest probe that the turn is alive.
+    // The paused hold withholds the shell and the domain tools that can write the project, while
+    // the read-only inspector stays as the honest probe that the turn is alive.
     for (const withheld of ['bash', 'write', 'edit', 'backlog', 'project']) {
       expect(scopes[0] ?? []).not.toContain(withheld);
     }
@@ -2538,9 +2626,9 @@ describe('input runner', () => {
     h.store.controlTask({ taskId: task.id, command: 'resume' });
     accept(h.store, 'i-3', 'req-3', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
-    // A second probe, in the running Task: the domain write tools are back; the shell never is.
-    expect(scopes[1] ?? []).toEqual(expect.arrayContaining(['backlog', 'project', 'inspect']));
-    expect(scopes[1] ?? []).not.toContain('bash');
+    // A second probe, in the running Task: the domain write tools and the observation shell are back.
+    expect(scopes[1] ?? []).toEqual(expect.arrayContaining(['backlog', 'project', 'inspect', 'bash']));
+    expect(scopes[1] ?? []).toContain('bash');
   }, 60_000);
 });
 describe('thinking level', () => {

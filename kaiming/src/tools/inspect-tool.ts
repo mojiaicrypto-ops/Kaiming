@@ -1,11 +1,10 @@
 /**
  * Read-only git inspection for the chief (P0-4).
  *
- * The chief must be able to check the real repository state itself (`git status/log/diff/show`),
- * but it must not have a shell: a shell is a general write tool, and an orchestrator that can write
- * files can finish a "just do it" request by bypassing the Task pipeline entirely. This tool exists
- * for that difference: a fixed subcommand table executed with `execFile` — no shell, no model
- * supplied flags, no path for a write.
+ * The chief also has a shell for observation and operations, but this tool remains the structural,
+ * fixed-argv way to answer `git status/log/diff/show` without a shell parser or model-supplied
+ * flags. It cannot write files or commit; the settlement commit belongs to the settler. The chief
+ * shell audit (`shell-audit.ts`) reports tracked changes after a bash call, but it is not a sandbox.
  *
  * Read-only is enforced structurally, not by scanning command text:
  *  - the argument vector is built here from a small enum (`status`, `log`, `diff`, `show`,

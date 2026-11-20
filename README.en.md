@@ -36,7 +36,7 @@ Modern AI coding agents can already write great code, yet most tools default to 
 | :--- | :--- |
 | **Context Drift**: Earlier decisions get compressed away or confidently misremembered later in the thread | **Facts on Disk (`.dev/`)**: Specs, Plans, backlog items, and reports live as real project files; each new Session assembles current documents on demand instead of inheriting drifted chat memory |
 | **Grading Its Own Homework**: The same agent writes the code and declares "all checks passed" in one context | **Structural Independence**: Review and Test run in fresh, isolated Sessions that inspect real files, Git diffs, and runtime evidence—**they never read the developer's chat transcript** |
-| **Scope Creep & Shortcuts**: Silently editing unrelated files or skipping design/testing to show quick output | **Read-Only Chief + Host Hard Gates**: The Chief has no file-write or arbitrary shell-write permissions and must create a Task to dispatch specialists; the host verifies delivery snapshots, review coverage, and Git commits before closing |
+| **Scope Creep & Shortcuts**: Silently editing unrelated files or skipping design/testing to show quick output | **Audited Chief Shell + Host Hard Gates**: The Chief has a shell for observation/operations, no file-write/edit, and a host audit reports any HEAD/worktree change; delivery changes still require a Task, and the host verifies delivery snapshots, review coverage, and Git commits before closing |
 | **Tab Closed = Progress Lost**: Refreshing the browser or losing network drops the run, with no clear way to resume | **Resident Server + Fact-Based Recovery**: Execution is decoupled from viewing; Tasks keep running when the browser closes, and restarts reconcile SQLite state against actual files on disk without replaying unknown side effects |
 | **Amnesia After Delivery**: Code changes land, but specs and backlog stay stale—forcing the next session to start from scratch | **Mandatory Settlement (`settler`)**: Every Task finishes by updating spec implementation status, closing delivered backlog items, archiving reports, and committing to Git |
 
@@ -71,7 +71,7 @@ Kaiming provides 6 specialist roles under the Chief. **Each role runs in its own
 
 | Role | Responsibility & Deliverable | Context & Permission Boundary |
 | :--- | :--- | :--- |
-| **Chief (`chief`)** | Collaborates with the user, clarifies goals, authors the Task Plan, orchestrates phases | Read-only file access + allowlisted read-only Git inspector (`inspect`); **no file-write or write-shell access** |
+| **Chief (`chief`)** | Collaborates with the user, clarifies goals, authors the Task Plan, orchestrates phases | Read/grep/find/ls + `bash` for observation/operations (audited after each call) + read-only Git inspector (`inspect`); **no write/edit**; tracked project changes go through a Task |
 | **Investigator (`investigator`)** | Explores the codebase, diagnoses root causes, maps current behavior | Read-only toolset; produces structured investigation reports |
 | **Designer (`designer`)** | Authors/updates product specs (`.dev/product/`) and technical designs (`.dev/technical/`), splits ready backlog slices | Writes only spec and design documents within a Design Task |
 | **Developer (`developer`)** | Implements code per Plan and specs, runs focused unit/TDD checks | Full project file read/write, test execution, browser tools, and `codemode` |
@@ -200,8 +200,8 @@ Add `kaiming` to your MCP client configuration:
 ## 🔒 Security & Scope Boundaries
 
 - **Localhost by Default**: Listens only on `127.0.0.1:4173` out of the box. If you expose it remotely, put it behind a reverse proxy with HTTPS and access control.
-- **Role Isolation & Destructive-Command Confirmation**: File tools are strictly jailed to the active project directory (the workbench's private data directory is off-limits); the Chief has no file-write or write-shell access; specialist destructive shell commands (`rm`, `git reset --hard`, etc.) require explicit user confirmation in the browser.
-- **Not an OS Sandbox**: Specialist `bash` runs with the permissions of the OS user that launched Kaiming. Do not run untrusted third-party repositories without OS/container isolation.
+- **Role Isolation & Destructive-Command Confirmation**: File tools are strictly jailed to the active project directory (the workbench's private data directory is off-limits); the Chief has no file-write capability, its shell is for observation/operations and every call is audited for HEAD/worktree changes; chief commit/history/worktree-discard commands and specialist destructive commands (`rm`, `git reset --hard`, etc.) require explicit user confirmation in the browser.
+- **Not an OS Sandbox**: All roles' `bash` runs with the permissions of the OS user that launched Kaiming; the chief audit makes a change visible but cannot prevent it. Do not run untrusted third-party repositories without OS/container isolation.
 - **Focused Single-User Workbench**: Built for individual developers and hands-on technical leads. Multi-tenant SaaS, team RBAC, and automated production deployment pipelines are out of scope.
 
 ---

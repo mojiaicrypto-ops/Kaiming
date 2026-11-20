@@ -222,6 +222,7 @@ For the full tool surface, errors and verification, see the [MCP service (Chines
 - By default it listens only on loopback. Exposing it to the internet requires HTTPS, a reverse proxy and access control; this is not a managed multi-tenant service.
 - The access password lives in `kaiming/.env`; model keys live in the data directory or server configuration. Never commit `.env`, `config/model.json` or the data directory.
 - Agent `bash` has the same permissions as the system user that started the workbench. There is no OS-level sandbox; do not run untrusted repositories or grant unnecessary privileges.
+- The Chief's `bash` is for observation/operations: after each call the host compares the local project's HEAD, status and dirty content and reports a change in the tool result. This audit is not a sandbox and cannot prevent a change; concurrent member writes, `nohup` background work and remote `ssh` commands are outside what it can attribute. Chief commit/history/worktree-discard commands and specialist deletions still require confirmation.
 - Model file tools refuse to read server-private storage (data directory, credentials, database, session history), but a deliberate `bash` bypass still needs OS-level permission boundaries.
 - Single-user by design. Team accounts, RBAC, managed hosting and automatic multi-tenant isolation are out of scope.
 

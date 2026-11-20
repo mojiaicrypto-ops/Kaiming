@@ -45,8 +45,8 @@ async function harness(replies: readonly StubReply[]): Promise<GateHarness> {
     store.close();
   });
   store.createProject({ id: 'p-1', realPath: env.cwd });
-  // The chief has no shell (P0-4); a developer session at its normal (unbound) tool set carries the
-  // bash calls this gate wraps.
+  // A developer session exercises the shared deletion rules; the chief-only history rules and the
+  // chief shell audit are covered in runtime.test.ts.
   store.createSession({ id: 's-dev', projectId: 'p-1', roleId: 'developer', cwd: env.cwd });
   store.acceptInput({
     inputId: 'i-1',
@@ -149,6 +149,18 @@ describe('the deletion gate in a real run', () => {
   it('does not ask for an ordinary command', async () => {
     const h = await harness([
       { kind: 'tool_calls', calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'echo ordinary-ok' }) }] },
+      { kind: 'text', text: 'ran without a question' },
+    ]);
+
+    const outcome = await h.runner.runNext('s-dev');
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.listPendingInteractions('s-dev')).toHaveLength(0);
+  }, 30_000);
+
+  it('does not ask a developer before a commit: the history rules are chief-only', async () => {
+    const h = await harness([
+      { kind: 'tool_calls', calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'git commit -m test' }) }] },
       { kind: 'text', text: 'ran without a question' },
     ]);
 

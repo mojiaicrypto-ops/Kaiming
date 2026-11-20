@@ -43,6 +43,7 @@ import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
 import { createBashTimeoutGuard, createFileBoundaryGuard, DEFAULT_BASH_TIMEOUT_SECONDS } from './tool-guard.ts';
+import { createShellAudit } from './shell-audit.ts';
 import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
@@ -803,7 +804,11 @@ export class InputRunner {
             createDeletionGate({
               isTrusted: () => this.trustedSessions.has(sessionId),
               trust: () => this.trustedSessions.add(sessionId),
+              guardHistory: session.roleId === 'chief',
             }),
+            // The chief's shell is for observation/operations; after each call, report any tracked
+            // project change (HEAD, status, dirty content) as an audit finding, not a rollback.
+            ...(session.roleId === 'chief' ? [createShellAudit({ cwd: session.cwd })] : []),
             ...(bashTimeoutSeconds > 0 ? [createBashTimeoutGuard({ seconds: bashTimeoutSeconds })] : []),
           ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),

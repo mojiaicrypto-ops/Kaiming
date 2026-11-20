@@ -155,7 +155,7 @@
 - **决定**：用户拍板 B+ —— 去掉主管 bash，换成宿主只读 `inspect`；用 `task(op=end)` 的“Review 后新增可评审文件”校验替代跨回合 Git 账本；提示词写明免打扰授权不等于跳过 Task。
 - **实现**：`tool-sets` chief = read/grep/find/ls/inspect（其他角色 denied inspect，paused/read 仍保留它）；`inspect` 以 `execFile` 执行固定 argv，只允许 status/log/diff/show/rev-parse，禁 ext-diff/textconv/fsmonitor 与可选锁，模型不能传 flag；结算提交归 settler。`deliverable.newReviewableDeliveryPaths` 在 `store.completionBlockers` 中检查当前交付路径减去 Review 路径（排除 baseline、按 Task 类型过滤、候选才查 gitignore），无 Git 同样生效。chief v9 增加免打扰语义。
 - **证据**：`test/inspect-tool.test.ts` 6/6（固定 argv、bad rev/path、真实仓库只读：status/HEAD 前后不变、非仓库报错、仓库配置的 external diff/textconv/fsmonitor helper 不执行）；`inspect-tool + tool-sets + report + runtime + deletion-gate-runtime` focused 107/107；全量 67 文件 683/683；`tsc`；`check:prompts` 15/15。独立 Test 用 7 条变异（加回 chief bash、放开 bad rev、去掉 fsmonitor 抑制、清空新文件检查、去掉 baseline 排除、去掉 ignored 过滤、把 docs 当代码交付）逐一确认对应用例按预期变红。Review 后新增代码文件、设计产物、无 Git 项目均被报告，settlement 文档、ignored 构建产物、未变的 inherited 文件不误报（`report.test.ts` 5 例）。提示词按进程缓存，重启 workbench 后才生效。
-- **边界**：不引入跨回合写入账本；未回填已有脏工作区的历史；`inspect` 不是沙箱，只保证“主管没有写能力”；删除、测试运行、提交由保留 bash 的专业角色承担。
+- **边界**：不引入跨回合写入账本；未回填已有脏工作区的历史；`inspect` 不是沙箱。2026-11-21 的 A 条目已恢复主管观察 shell（带 HEAD/工作区审计），P0-4 的“主管没有 shell/写能力”不再是当前契约；本条的 Review 后新增文件门禁仍然有效。
 
 ### 2026-11-19 · P0-5 交付收敛：结算遗留、验证档上限与信封注入
 
@@ -179,3 +179,12 @@
 - **实现**：Store schema v21 增加 `tasks.verificationProfile`（SCHEMA_SQL 与迁移同时具备）；`task(op=create/update)` 对 implement 必填档位，校验 `visual↔requiresTest=false`、`focused/broad↔true`，Plan 声明（允许 bold/italic/反引号）不一致即拒绝；旧 Task 只改 Plan 并新增声明时要求同时给出结构化档位；派发信封读 Task 字段，旧行回退 Plan 并标明来源，验收行与上限句明确覆盖 `## 验收`/`## 验证`。chief v11、developer v7、tester v6、reviewer v6、D-04/D-05、G2 同步；无新档、无自然语言审查。
 - **证据**：`tsc` 通过；全量 68 文件 697 通过；`check:prompts` 15/15；`task-tools`/`delegation`/`store`/`plan-contract` 定向通过（含旧行三条路径、v20→v21、bold 解析）。独立 Review Round 1 NEEDS_FIX（旧行仅改 Plan 可形成 broad 无 Test），修复后 Round 2 PASS；独立 Test passed：真实 task 工具覆盖创建拒绝矩阵、旧行 update、派发来源与上限句、迁移与解析器，并在 `/tmp` 副本删除旧行守卫后对应用例按预期变红（`test.md`）。
 - **边界**：宿主不审查 Plan/派发的自然语言，验收原文仍下发；实际约束依赖档位上限句与冲突报告。旧 Task 不回填；生产库未迁移；提示词按进程缓存，重启后生效。
+
+### 2026-11-21 · A — 主管恢复观察 shell + HEAD/工作区审计
+
+- **问题**：P0-4 为堵“主管不建 Task 用 bash 偷改项目”把主管 shell 整个拔掉，结果是 ssh/端口/容器/日志/git-ignored 本地 env 的日常排障也必须建 Task、派 member、走 Review/Settle；aisuangua 出现过查一个端口 5 分钟、为一条 `ssh ss -ltnp` 开 implement Task 的现场。根因是把“shell 可写”与“shell 可观察/运维”当成同一件事；read Task 又会过滤所有角色的 bash，所以给 investigator 加 bash 并不能修复那次 read Task 的卡壳。
+- **决定**：用户 2026-11-21 选 A（沙箱以后再说）：主管恢复 `bash`，只用于观察/运维；不持有 write/edit；read Task 与 paused hold 仍过滤 bash；每次主管 bash 后由宿主比较 HEAD/status/脏内容并告警；主管会话另对 commit/历史改写/工作区丢弃命令询问；investigator 保持只读。
+- **实现**：`tool-sets` chief = read/grep/find/ls/bash/inspect；`shell-audit.ts` 读 `rev-parse --show-prefix`、`rev-parse --verify HEAD`、`status --porcelain -z --untracked-files=all --no-renames`、`diff --binary HEAD` 与未跟踪文件 lstat；HEAD/status/脏内容/未跟踪标记任一变化即在工具结果追加 `chief shell audit` 并标 `isError`，不阻止、不回滚。git 调用 5s/16MB 上限；失败标 `limited` 并回退 HEAD/status；无 git 返回 null。`deletion-gate` 新增 `guardHistory`：主管对 commit/merge/rebase/cherry-pick/force-push/reset-hard/checkout--|./restore 询问，默认表对其他角色不变；`Trust all` 仍绕过门禁，但不绕过审计。`runner` 只为主管安装审计并开启 `guardHistory`。chief v12、G1/G2/G4、install/README 安全边界同步；提示词按进程缓存，重启后生效。
+- **补强（Review）**：`status` 失败不再静默返回 null，而是 `statusAvailable:false` + `limited` 的观察并追加非错误提示；审计首句改为“project state changed while this command ran”，避免把并发成员/后台写入归因给当前命令；新增 developer `git commit` 不询问的运行时负向对照；中文 README 的角色权限行同步。
+- **证据**：`test/shell-audit.test.ts` 12/12（干净、已脏文件二次编辑、未跟踪新增/修改、commit、ignored、子目录项目、无 git、status 不可读、单侧 status 失败不伪造变化、HEAD 不可读不比较、扩展告警/`isError`）；`tool-sets` 15/15、`deletion-gate` 11/11、`deletion-gate-runtime` 5/5（含 developer `git commit` 不询问的负向对照）；`runtime.test.ts` 新增真实 Pi 用例（主管 bash 改 tracked 文件→审计告警；只读 `git status` 不告警；主管 `git commit` 询问并拒绝）；全量 69 文件 717/717；`tsc`；`check:prompts` 15/15。独立 Review 首轮 5 项、二轮单侧 status/HEAD 与命令替换门禁均修复，三轮 PASS；独立 Test PASS（frozen tree 43/43 focused、717/717 full，含 6 组变异与负向对照，见 `.dev/work/chief-shell-audit-20261121/{review,test}.md`）。
+- **边界**：审计不是沙箱，不能阻止修改；只覆盖本地项目根内、git 可见的状态。并发成员写入、`nohup` 后台、`ssh` 远端、`.git` 内部与 ignored 文件不被归因；未跟踪文件只比较 size/mtime；超大脏树可能 `limited`。`git commit` 的文本门禁可被 `ssh host 'git commit'`、`sh -c` 等绕过，HEAD 审计只让本地提交可见。需要“物理上改不了”时走后续 OS 沙箱方案。

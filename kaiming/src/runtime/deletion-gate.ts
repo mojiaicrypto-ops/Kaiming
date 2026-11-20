@@ -1,5 +1,7 @@
 /**
- * The deletion gate (G1's bash clause): a destructive command asks the user before it runs.
+ * The shell gate (G1's bash clause): a destructive or history-changing command asks the user
+ * before it runs. The deletion rules apply to every role; a chief session adds history/worktree
+ * rules because its shell is for observation/operations, not delivery.
  *
  * Detection is *textual*: the command line is split into shell segments and each segment is matched
  * against the deletion rules below. That is not a shell parser and not a sandbox — a determined
@@ -10,10 +12,10 @@
  * tool allowlist (read Tasks hold no bash) and the delivery verification remain the outer bounds, as
  * before.
  *
- * Scope: only commands that really delete something. Git operations that merely discard working-tree
- * changes or rewrite remote history (`reset --hard`, `restore`, `checkout --`, `push --force`) are
- * deliberately not in this table; they are not deletion commands and asking for them made routine
- * test runs noisy.
+ * Scope: for every ordinary role, only commands that really delete something. The chief additionally
+ * enables `HISTORY_RULES` (commit, merge/rebase/cherry-pick, force-push, reset --hard, checkout --/.,
+ * restore); those are not deletions, but they would bypass the settlement path. Keeping them
+ * chief-only avoids asking during routine developer/tester test runs.
  */
 import type { ExtensionAPI, ExtensionFactory, ToolCallEvent } from '@earendil-works/pi-coding-agent';
 
@@ -180,14 +182,68 @@ const RULES: readonly DeletionRule[] = [
   },
 ];
 
+/** `git` with any leading `-c key=value` / `-C path` options, at command position. */
+const HISTORY_GIT = String.raw`git\s+(?:(?:-c|-C)\s+\S+\s+)*`;
+
 /**
- * Why a command is destructive, or `undefined` when it is not. Exported so the rule table can be
- * tested without a running session.
+ * Chief-only history/worktree rules (A). These are not deletions: they discard working-tree
+ * changes, rewrite history, or commit without the settlement path. They ask in a chief session
+ * because the chief has no write/edit and its shell is meant for observation/operations. The text
+ * is still only a speed bump; the shell audit reports a HEAD/dirty-state change even when the user
+ * chooses `Trust all commands in this session`.
  */
-export function deletionCommandReason(command: string): string | undefined {
+const HISTORY_RULES: readonly DeletionRule[] = [
+  {
+    match: (s) => atCommandStart(s, `${HISTORY_GIT}commit(?=\\s|$)`),
+    label: 'commits project changes; the settlement commit belongs to the settler',
+  },
+  {
+    match: (s) => atCommandStart(s, `${HISTORY_GIT}(?:merge|rebase|cherry-pick)(?=\\s|$)`),
+    label: 'rewrites project history',
+  },
+  {
+    match: (s) =>
+      atCommandStart(s, `${HISTORY_GIT}push\\b`) &&
+      /(^|\s)(?:--force(?:-with-lease)?|-f)(?=[\s)\x60]|$)/.test(s),
+    label: 'rewrites remote history',
+  },
+  {
+    match: (s) =>
+      atCommandStart(s, `${HISTORY_GIT}reset\\b`) && /(^|\s)--hard(?=[\s)\x60]|$)/.test(s),
+    label: 'discards working-tree changes',
+  },
+  {
+    match: (s) =>
+      atCommandStart(s, `${HISTORY_GIT}checkout\\b`) && /(^|\s)--(?=\s|$)/.test(s),
+    label: 'discards working-tree changes',
+  },
+  {
+    match: (s) => atCommandStart(s, `${HISTORY_GIT}checkout\\s+\\.(?=[\\s)\\x60]|$)`),
+    label: 'discards working-tree changes',
+  },
+  {
+    match: (s) => atCommandStart(s, `${HISTORY_GIT}restore\\b`),
+    label: 'discards working-tree changes',
+  },
+];
+
+export interface DeletionRuleOptions {
+  /** Chief sessions also ask before commit/history/worktree-discard commands. */
+  readonly guardHistory?: boolean;
+}
+
+/**
+ * Why a command asks for approval, or `undefined` when it does not. Exported so the rule table can
+ * be tested without a running session. The default table is unchanged for every other role.
+ */
+export function deletionCommandReason(
+  command: string,
+  options: DeletionRuleOptions = {},
+): string | undefined {
+  const rules = options.guardHistory === true ? [...RULES, ...HISTORY_RULES] : RULES;
   for (const segment of segmentsOf(command)) {
     if (segment.trim() === '') continue;
-    for (const rule of RULES) {
+    for (const rule of rules) {
       if (rule.match(segment)) {
         return rule.label;
       }
@@ -205,6 +261,8 @@ const REJECT = 'Reject';
 export interface DeletionGateOptions {
   readonly isTrusted?: () => boolean;
   readonly trust?: () => void;
+  /** The chief's shell also asks before history/worktree-discard and commit commands. */
+  readonly guardHistory?: boolean;
 }
 
 /**
@@ -224,7 +282,7 @@ export function createDeletionGate(options: DeletionGateOptions = {}): Extension
       const input = event.input as { command?: string };
       const command = input['command'];
       if (typeof command !== 'string' || command === '') return undefined;
-      const reason = deletionCommandReason(command);
+      const reason = deletionCommandReason(command, { guardHistory: options.guardHistory === true });
       if (reason === undefined) return undefined;
       if (!ctx.hasUI) {
         return {
@@ -233,7 +291,7 @@ export function createDeletionGate(options: DeletionGateOptions = {}): Extension
         };
       }
       const answer = await ctx.ui.select(
-        `Approve the destructive command?\n\n${command}\n\n(${reason})`,
+        `Approve this shell command?\n\n${command}\n\n(${reason})`,
         [APPROVE_ONCE, TRUST_SESSION, REJECT],
       );
       if (answer === TRUST_SESSION) {
