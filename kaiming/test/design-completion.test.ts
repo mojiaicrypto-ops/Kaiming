@@ -56,6 +56,7 @@ function task(overrides: Partial<TaskRow> = {}): TaskRow {
     flowVersion: 1,
     reworkCount: 0,
     requiresTest: false,
+    verificationProfile: null,
     goal: 'design',
     scope: 'x',
     acceptanceRefs: [],

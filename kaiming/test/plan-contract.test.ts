@@ -86,6 +86,15 @@ describe('verification profile', () => {
     ).toBe('broad');
   });
 
+  it('accepts Markdown emphasis around the value, as real Plans write it', () => {
+    expect(declaredVerificationProfile('Verification profile: **focused**\n')).toBe('focused');
+    expect(declaredVerificationProfile('Verification profile: **broad** (schema migration)\n')).toBe('broad');
+    expect(declaredVerificationProfile('Verification profile: __visual__\n')).toBe('visual');
+    expect(declaredVerificationProfile('verification profile: *focused*\n')).toBe('focused');
+    // Emphasis inside a fence is still an example, not a declaration.
+    expect(declaredVerificationProfile('```\nVerification profile: **broad**\n```\n')).toBeUndefined();
+  });
+
   it('ignores examples inside fenced code and prose that only mentions the phrase', () => {
     const plan = [
       '## 验证',

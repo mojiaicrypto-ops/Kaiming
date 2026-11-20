@@ -22,8 +22,10 @@ export interface DispatchEnvelopeFacts {
   readonly planPath?: string;
   readonly acceptance?: string;
   readonly scopeLine?: string;
-  /** The Plan's declared profile, null when it declares none, absent when not evaluated. */
+  /** The Task's stored profile; null means none stored (legacy) and the Plan fallback applies. */
   readonly verificationProfile?: VerificationProfile | null;
+  /** True when the profile came from the Task row; false means the legacy Plan-line fallback. */
+  readonly verificationProfileFromTask?: boolean;
   /** Latest implementation/review/test reports of this Task, newest last. */
   readonly upstream: readonly ResultRow[];
 }
@@ -34,16 +36,16 @@ const PROFILE_LIMITS: Record<VerificationProfile, string> = {
   broad: 'the broader suite or cross-module E2E is allowed with the reason recorded',
 };
 
-function profileLine(profile: VerificationProfile | null, roleId: string): string {
+function profileLine(profile: VerificationProfile | null, roleId: string, fromTask: boolean): string {
   const head =
     profile === null
-      ? 'Verification profile: none declared in the Plan; treat it as focused'
-      : `Verification profile (from the Plan): ${profile}`;
+      ? 'Verification profile: none declared; treat it as focused'
+      : `Verification profile (${fromTask ? 'from the Task' : 'from the Plan; the Task predates the field'}): ${profile}`;
   const body =
     (profile ?? 'focused') === 'focused' && roleId === 'tester'
-      ? 'verify only this acceptance and related regression; no full suite and no cross-module E2E'
+      ? 'verify only this acceptance through the smallest real entry of the changed contract and related regression; no full suite and no cross-module E2E'
       : PROFILE_LIMITS[profile ?? 'focused'];
-  return `${head} — ${body}. A Plan verification section or dispatch that asks for more does not widen it; report the conflict.`;
+  return `${head} — ${body}. A Plan (including its acceptance and verification sections) or dispatch that asks for more does not widen it; run only the profile's checks and report the conflict.`;
 }
 
 /**
@@ -77,7 +79,7 @@ export function buildDispatchEnvelope(
   }
   if (!member.isContinuation && facts.acceptance !== undefined && facts.acceptance !== '') {
     lines.push(
-      `Acceptance (from the Plan): ${
+      `Acceptance (from the Plan; the verification profile bounds what this dispatch must run): ${
         facts.acceptance.length > ACCEPTANCE_LIMIT ? `${facts.acceptance.slice(0, ACCEPTANCE_LIMIT)}…` : facts.acceptance
       }`,
     );
@@ -91,7 +93,7 @@ export function buildDispatchEnvelope(
     task.workKind === 'implement' &&
     (member.roleId === 'developer' || member.roleId === 'tester')
   ) {
-    lines.push(profileLine(facts.verificationProfile, member.roleId));
+    lines.push(profileLine(facts.verificationProfile, member.roleId, facts.verificationProfileFromTask === true));
   }
   if (facts.upstream.length > 0) {
     lines.push('Upstream results:');
@@ -109,7 +111,21 @@ export function buildDispatchEnvelope(
   return lines.join('\n');
 }
 
-/** One Plan read and one scope check per dispatch, shared by every member of the batch. */
+/**
+ * The Task row is authoritative; a Task created before the field falls back to its Plan line.
+ * `fromTask` tells the envelope which fact the member is reading.
+ */
+export function resolveVerificationProfile(
+  task: TaskRow,
+  planText: string | undefined,
+): { readonly profile: VerificationProfile | null; readonly fromTask: boolean } {
+  if (task.verificationProfile !== null) {
+    return { profile: task.verificationProfile, fromTask: true };
+  }
+  const declared = planText === undefined ? undefined : declaredVerificationProfile(planText);
+  return { profile: declared ?? null, fromTask: false };
+}
+
 function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelopeFacts {
   const planText = task.planRef === null ? undefined : readPlan(task.planRef).text;
   const upstream =
@@ -122,8 +138,14 @@ function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelop
     ...(planText !== undefined
       ? { scopeLine: scopeCheckText(scopeCheckFor(context.cwd, planText, task.dirtyBaseline)) }
       : {}),
-    ...(task.workKind === 'implement' && planText !== undefined
-      ? { verificationProfile: declaredVerificationProfile(planText) ?? null }
+    ...(task.workKind === 'implement'
+      ? (() => {
+          const resolved = resolveVerificationProfile(task, planText);
+          return {
+            verificationProfile: resolved.profile,
+            verificationProfileFromTask: resolved.fromTask,
+          };
+        })()
       : {}),
     upstream,
   };

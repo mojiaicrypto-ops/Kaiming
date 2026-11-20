@@ -6,6 +6,7 @@
 import { matchesGlob } from 'node:path';
 import { changedProjectPaths } from './git-delivery.ts';
 import { isUnchangedBaselineDirty, type DirtyBaseline } from './deliverable.ts';
+import type { VerificationProfile } from '../store/store.ts';
 
 const ACCEPTANCE_NAMES = ['验收', 'acceptance', 'acceptance criteria'];
 const SCOPE_NAMES = ['范围', 'scope'];
@@ -82,9 +83,14 @@ export function acceptanceChanged(before: string, after: string): boolean {
   return acceptanceText(before) !== acceptanceText(after);
 }
 
-export type VerificationProfile = 'visual' | 'focused' | 'broad';
+export type { VerificationProfile };
 
-const PROFILE_LINE = /^\s*verification\s+profile\s*[：:]\s*`?(visual|focused|broad)`?\b/i;
+/** Markdown emphasis/backticks around the value are tolerated; the line itself must still be one line. */
+const PROFILE_VALUE_DECORATION = '(?:`{1,3}|\\*{1,3}|_{1,3}|~~)?';
+const PROFILE_LINE = new RegExp(
+  `^\\s*verification\\s+profile\\s*[：:]\\s*${PROFILE_VALUE_DECORATION}(visual|focused|broad)${PROFILE_VALUE_DECORATION}\\b`,
+  'i',
+);
 const FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const INDENTED_CODE = /^(?: {4,}|\t)/;
 

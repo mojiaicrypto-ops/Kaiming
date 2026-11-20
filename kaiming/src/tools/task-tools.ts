@@ -13,16 +13,25 @@ import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import {
   StoreError,
   OPEN_TASK_STATUSES,
+  VERIFICATION_PROFILES,
   WORK_KINDS,
+  isVerificationProfile,
   type ArtifactRef,
   type Store,
   type TaskPhase,
   type TaskRow,
+  type VerificationProfile,
   type WorkKind,
 } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
-import { acceptanceChanged, acceptanceGap, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
+import {
+  acceptanceChanged,
+  acceptanceGap,
+  declaredVerificationProfile,
+  scopeCheckFor,
+  scopeCheckText,
+} from '../runtime/plan-contract.ts';
 import { readBacklog } from '../runtime/backlog-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
@@ -111,6 +120,7 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
     phase: task.phase,
     status: task.status,
     requiresTest: task.requiresTest,
+    verificationProfile: task.verificationProfile,
     goal: task.goal,
     scope: task.scope,
     acceptanceRefs: task.acceptanceRefs,
@@ -175,6 +185,11 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
           additionalProperties: false,
         },
         requiresTest: { type: 'boolean' },
+        verificationProfile: {
+          type: 'string',
+          enum: [...VERIFICATION_PROFILES],
+          description: 'required for implement: visual excludes Test; focused/broad require it',
+        },
 
         backlogIds: {
           type: 'array',
@@ -196,6 +211,7 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
             basisRefs: { type: 'array', items: { type: 'string' } },
             planMarkdown: { type: 'string' },
             requiresTest: { type: 'boolean' },
+            verificationProfile: { type: 'string', enum: [...VERIFICATION_PROFILES] },
           },
           additionalProperties: false,
         },
@@ -400,6 +416,41 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
     return fail('INVALID_ARGUMENT', `a ${workKind} Task cannot declare requiresTest=true`);
   }
   const requiresTest = workKind === 'implement' ? (rawTest as boolean) : false;
+  const rawProfile = params['verificationProfile'];
+  if (rawProfile !== undefined && !isVerificationProfile(rawProfile)) {
+    return fail('INVALID_ARGUMENT', `verificationProfile must be one of ${VERIFICATION_PROFILES.join(', ')}`, {
+      verificationProfile: rawProfile,
+    });
+  }
+  const verificationProfile = rawProfile as VerificationProfile | undefined;
+  if (workKind === 'implement') {
+    if (verificationProfile === undefined) {
+      return fail(
+        'INVALID_ARGUMENT',
+        'an implement Task must state verificationProfile (visual, focused or broad)',
+        { missing: 'verificationProfile' },
+      );
+    }
+    if (requiresTest !== (verificationProfile !== 'visual')) {
+      return fail(
+        'INVALID_ARGUMENT',
+        verificationProfile === 'visual'
+          ? 'visual requires requiresTest=false'
+          : `${verificationProfile} requires requiresTest=true`,
+        { verificationProfile, requiresTest },
+      );
+    }
+    const declared = declaredVerificationProfile(planMarkdown);
+    if (declared !== undefined && declared !== verificationProfile) {
+      return fail(
+        'INVALID_ARGUMENT',
+        `the Plan declares verification profile ${declared} but verificationProfile is ${verificationProfile}; make them agree`,
+        { declared, verificationProfile },
+      );
+    }
+  } else if (verificationProfile !== undefined) {
+    return fail('INVALID_ARGUMENT', `a ${workKind} Task does not declare a verification profile`);
+  }
   const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
   const basisRefs = readStringArray(params, 'basisRefs') ?? [];
 
@@ -469,6 +520,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       flowVersion: 1,
       initialPhase: workKind === 'design' ? 'design' : 'plan',
       requiresTest,
+      verificationProfile: verificationProfile ?? null,
       goal,
       scope,
       acceptanceRefs,
@@ -504,7 +556,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
         },
       );
     }
-    return ok(`Task ${task.id} created (${workKind}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
+    return ok(`Task ${task.id} created (${workKind}, requiresTest=${task.requiresTest}, profile=${task.verificationProfile ?? 'none'}); plan at ${target.path}`, {
       taskId: task.id,
       workKind: task.workKind,
       phase: task.phase,
@@ -564,6 +616,67 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
     });
     planRef = planRefFor(target, planMarkdown);
   }
+  let profileChange: VerificationProfile | undefined;
+  if (changes !== undefined && changes['verificationProfile'] !== undefined) {
+    const value = changes['verificationProfile'];
+    if (!isVerificationProfile(value)) {
+      return fail('INVALID_ARGUMENT', `verificationProfile must be one of ${VERIFICATION_PROFILES.join(', ')}`);
+    }
+    if (existing.workKind !== 'implement') {
+      return fail('INVALID_ARGUMENT', `a ${existing.workKind} Task does not declare a verification profile`);
+    }
+    profileChange = value;
+  }
+  const requiresTestChange =
+    changes !== undefined && typeof changes['requiresTest'] === 'boolean'
+      ? (changes['requiresTest'] as boolean)
+      : undefined;
+  if (existing.workKind === 'implement' && (profileChange !== undefined || requiresTestChange !== undefined)) {
+    const planText = planMarkdown ?? (existing.planRef === null ? '' : readPlan(existing.planRef).text);
+    const declared = declaredVerificationProfile(planText);
+    const nextProfile = profileChange ?? existing.verificationProfile ?? declared;
+    if (nextProfile === undefined) {
+      return fail(
+        'INVALID_ARGUMENT',
+        'this Task predates the structured verification profile; state verificationProfile with the change',
+        { missing: 'verificationProfile' },
+      );
+    }
+    const nextRequiresTest = requiresTestChange ?? existing.requiresTest;
+    if (nextRequiresTest !== (nextProfile !== 'visual')) {
+      return fail(
+        'INVALID_ARGUMENT',
+        nextProfile === 'visual' ? 'visual requires requiresTest=false' : `${nextProfile} requires requiresTest=true`,
+        { verificationProfile: nextProfile, requiresTest: nextRequiresTest },
+      );
+    }
+    if (declared !== undefined && declared !== nextProfile) {
+      return fail(
+        'INVALID_ARGUMENT',
+        `the Plan declares verification profile ${declared} but the Task would use ${nextProfile}; make them agree`,
+        { declared, verificationProfile: nextProfile },
+      );
+    }
+  } else if (planMarkdown !== undefined && existing.workKind === 'implement') {
+    const declared = declaredVerificationProfile(planMarkdown);
+    if (existing.verificationProfile !== null) {
+      if (declared !== undefined && declared !== existing.verificationProfile) {
+        return fail(
+          'INVALID_ARGUMENT',
+          `the Plan declares verification profile ${declared} but the Task's verificationProfile is ${existing.verificationProfile}; update both together`,
+          { declared, verificationProfile: existing.verificationProfile },
+        );
+      }
+    } else if (declared !== undefined) {
+      // A legacy row has no stored pairing to check: a new declaration must come with the structured
+      // profile, or `broad` could sit on requiresTest=false with no Test phase.
+      return fail(
+        'INVALID_ARGUMENT',
+        'this Task predates the structured verification profile; state verificationProfile with the revised Plan',
+        { missing: 'verificationProfile' },
+      );
+    }
+  }
   try {
     const task = context.store.updateTask({
       taskId,
@@ -590,6 +703,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
       ...(changes !== undefined && typeof changes['requiresTest'] === 'boolean'
         ? { requiresTest: changes['requiresTest'] as boolean }
         : {}),
+      ...(profileChange !== undefined ? { verificationProfile: profileChange } : {}),
     });
     if (planMarkdown !== undefined) {
       try {

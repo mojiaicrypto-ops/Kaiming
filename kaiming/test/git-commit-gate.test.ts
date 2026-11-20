@@ -539,6 +539,7 @@ describe('task end refuses an uncommitted delivery', () => {
       planMarkdown: '# plan\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const taskId = String(created.details['taskId']);
     expect(taskId).not.toBe('');
@@ -576,6 +577,7 @@ describe('task end refuses an uncommitted delivery', () => {
       planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const taskId = String(created.details['taskId']);
     // The baseline really recorded the inherited file, and nothing else.
@@ -612,6 +614,7 @@ describe('task end refuses an uncommitted delivery', () => {
       planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const taskId = String(created.details['taskId']);
     write(w.repo, 'src/a.ts', 'export const a = 1;\n');
@@ -644,6 +647,7 @@ describe('task end refuses an uncommitted delivery', () => {
       planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const taskId = String(created.details['taskId']);
     // Host bookkeeping never enters the baseline; the rule files written by the user do.
@@ -738,6 +742,7 @@ describe('task end refuses an uncommitted delivery', () => {
       planMarkdown: '# plan\n\n## 范围\n`src/a.ts`\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const taskId = String(created.details['taskId']);
 

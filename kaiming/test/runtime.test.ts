@@ -1347,6 +1347,7 @@ describe('input runner', () => {
       planMarkdown: '# Plan\n1. implement\n2. review\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
+      verificationProfile: 'focused',
     });
     const h = await harness({
       replies: [
@@ -1535,6 +1536,7 @@ describe('input runner', () => {
       planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
+      verificationProfile: 'focused',
     });
     const delegateArgs = JSON.stringify({
       op: 'dispatch',
@@ -1604,6 +1606,7 @@ describe('input runner', () => {
       planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
+      verificationProfile: 'focused',
     });
     const delegateArgs = JSON.stringify({
       op: 'dispatch',
@@ -2289,6 +2292,7 @@ describe('input runner', () => {
       planMarkdown: '# write plan\n1. look, then change\n\n## 验收\n- behaviour changed\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: false,
+      verificationProfile: 'visual',
     });
     const delegateArgs = JSON.stringify({
       op: 'dispatch',

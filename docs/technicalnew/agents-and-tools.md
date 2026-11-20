@@ -41,8 +41,8 @@ task、agent_report、backlog、project 按工具级注册 Pi executionMode=sequ
 
 | op | 参数 → 结果 |
 |---|---|
-| create | type（read/write）、workKind（design/implement/document/investigate；write 必填，read 省略为 investigate）、goal、scope（一句话范围概述）、acceptanceRefs、basisRefs、planMarkdown（write 必含「验收」一节；越界提示读取其中的「范围」一节）、backlogIds?、requiresTest?、authorizationRef → taskId/phase/workKind/planRef |
-| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,requiresTest?} → 当前 Task/阶段/workKind/成员/下一允许动作（授权引用建 Task 时固定，不在 update 中改写；type/workKind 创建后不变） |
+| create | type（read/write）、workKind（design/implement/document/investigate；write 必填，read 省略为 investigate）、goal、scope（一句话范围概述）、acceptanceRefs、basisRefs、planMarkdown（write 必含「验收」一节；越界提示读取其中的「范围」一节）、requiresTest、verificationProfile（implement 必填：visual/focused/broad；visual ⇒ requiresTest=false，focused/broad ⇒ true；Plan 同一声明行不得冲突）、backlogIds?、authorizationRef → taskId/phase/workKind/planRef |
+| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,requiresTest?,verificationProfile?} → 当前 Task/阶段/workKind/成员/下一允许动作（授权引用建 Task 时固定，不在 update 中改写；type/workKind 创建后不变） |
 | dispatch | taskId、sessions?[{roleId? 或 sessionId?、label?、instructions、expectedKind?、refs?、dependsOnResultIds?、writeScope?:string[]}]、waitTimeoutMs? → 当前步骤全部成员状态与报告/重叠告警；写角色在 write Task 必须提供非空 writeScope |
 | control | taskId、command=pause/resume/cancel → 实际 status 与待处理状态 |
 | end | taskId、completionResultId → completed，或 COMPLETION_INCOMPLETE + 缺项清单；主设计 Task 另核对设计产物、原待办关闭和切片引用 |
@@ -50,7 +50,7 @@ task、agent_report、backlog、project 按工具级注册 Pi executionMode=sequ
 | adopt | taskId、chiefSessionId → 新所有者；停稳相关执行，目标主管无未结束 Task |
 | recover | taskId、sessionId、evidenceRefs、resolution=completed/failed/stopped → 核对归属与证据后关闭该 Session 的中断输入；证据不足保持 interrupted |
 
-**create**：type 仍只有 read/write；workKind 选择完成链，不是新的用户任务类型。write 必须显式给 workKind；read 省略时取 investigate，禁止 write kind。type 与 kind 必须一致：design/implement/document 只能 write，investigate 只能 read。requiresTest：implement 必须显式 boolean；design/document/investigate 必须 false 或省略。程序不从 goal 推断 kind 或测试责任。
+**create**：type 仍只有 read/write；workKind 选择完成链，不是新的用户任务类型。write 必须显式给 workKind；read 省略时取 investigate，禁止 write kind。type 与 kind 必须一致：design/implement/document 只能 write，investigate 只能 read。requiresTest：implement 必须显式 boolean；design/document/investigate 必须 false 或省略。verificationProfile：implement 必须显式给出，且与 requiresTest 配对（visual ⇒ false，focused/broad ⇒ true）；Plan 独立行（允许 `**bold**`）声明了不同值时 create/update 拒绝。旧 Task 无该字段时派发回退读 Plan。程序不从 goal 推断 kind、档位或测试责任。
 
 工作链：`design` 初始 design，允许 clarify/analyze/design/review/settle，requiresTest=false；`implement` 初始 plan，允许 plan/design/develop/review/test/settle，`design` 只用于 J-10 补充设计，test 只在 requiresTest=true 时合法；`document` 初始 plan，允许 plan/design/review/settle，requiresTest=false；`investigate` 初始 plan，允许 clarify/analyze/design/plan/settle，无 Review/Test。新 Task 写 `flowVersion=1`；迁移旧 Task 为 0，不校验阶段图。
 
@@ -181,7 +181,7 @@ chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
 
 正文提取边界固定：base 从第一个 `## Base rules` 到文件末尾（含 `## Judgment and expression`）；specialists 从 `## Shared rules` 到 `## Role file map` 之前；chief 与各专业角色从 `## Role and goal` 到文件末尾。保留正文内的各节，不只取第一个小节；文档标题/状态说明与角色映射表不进入模型。
 
-base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.dev/INDEX.md`、`.dev/product/`、`.dev/technical/`、`.dev/backlog.md`、`.dev/work/<taskId>/`），不依赖某个专业角色正文；chief 正文写明设计完成门禁只读 `.dev/product/` 与 `.dev/technical/`（初始化的入口文件由结算保存，不进入门禁）。design Task 派发给 designer 时，宿主信封追加同一条事实与切片写入通道（新切片用 `add`，`edit` 是纯文本替换）。implement Task 派发给 developer/tester 时，宿主从 Plan 读取独占一行的 `verification profile: visual|focused|broad` 声明（值后可带说明），信封追加该档与“派发不得加码、冲突要报告”；没有声明时写明按 focused 处理。宿主只注入事实，不解析派发命令。
+base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.dev/INDEX.md`、`.dev/product/`、`.dev/technical/`、`.dev/backlog.md`、`.dev/work/<taskId>/`），不依赖某个专业角色正文；chief 正文写明设计完成门禁只读 `.dev/product/` 与 `.dev/technical/`（初始化的入口文件由结算保存，不进入门禁）。design Task 派发给 designer 时，宿主信封追加同一条事实与切片写入通道（新切片用 `add`，`edit` 是纯文本替换）。implement Task 派发给 developer/tester 时，宿主读 Task 的 `verificationProfile` 并追加该档与“验收/验证/派发不得加码、冲突要报告”；旧 Task 该字段为空时回退读 Plan 独占一行的 `verification profile: visual|focused|broad`（值可加粗/反引号），再没有则按 focused 处理。宿主只注入事实，不解析派发命令。
 
 **语言**：注入模型的系统级文本（九份角色提示词正文、项目入口 AGENTS.md、工具描述与 schema、宿主生成的指令与通知）默认使用英文；模型对用户的自然语言回复跟随用户输入语言。检查入口：`kaiming/checks/prompt-language.ts`（按上述边界抽取并断言无中日韩字符、边界可解析、角色正文齐全）。
 
@@ -191,7 +191,7 @@ base 正文固定写明项目知识目录（`AGENTS.md`、`.dev/PROJECT.md`、`.
 | designer / [designer](prompts/designer.md) | 设计目标、待办与规格、产品/技术索引及选定模块、已确认决定、Plan | 普通文档写入负责人；规格直接写入，待办经 backlog 工具；不默认整项目或所有模块 |
 | developer / [developer](prompts/developer.md) | 指定实施目标、规格与 Plan 的验收/范围、必要技术接口、依赖结果、适用单元/集成/E2E 测试入口 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置；待办只读 |
 | reviewer / [reviewer](prompts/reviewer.md) | 规格与 Plan 的验收/范围、实际交付、真实证据、越界文件清单 | 独立只读成果；无作者、主管、其他 Reviewer 聊天自评，无任意 bash |
-| tester / [tester](prompts/tester.md) | 最近一次通过的独立复核、规格与 Plan 的验收/范围、API/浏览器 E2E 入口、适用服务/地址、环境与数据准备依据、真实证据 | 适用测试目录/副本，执行测试及准备临时验收产物；不修改交付源码，无作者/主管聊天自评 |
+| tester / [tester](prompts/tester.md) | 最近一次通过的独立复核、规格与 Plan 的验收/范围、能观测被改契约的最小真实入口（直接调用/CLI、一次 API 请求或一条浏览器路径）、该入口所需的环境与数据准备依据、真实证据 | 适用测试目录/副本，执行测试及准备临时验收产物；不修改交付源码，无作者/主管聊天自评 |
 | settler / [settler](prompts/settler.md) | 有效成果/检查、实际交付、受影响知识入口、遗留与保存安排 | 仅适用结算记录与 Git/本机保存权限，保护无关改动 |
 | investigator / [investigator](prompts/investigator.md) | Task 调查目标或被核实输入/事实、选定事实/证据路径 | 只读与已配置检查；不默认任意执行，不改变恢复/完成状态 |
 

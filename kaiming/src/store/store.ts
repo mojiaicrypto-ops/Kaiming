@@ -72,6 +72,17 @@ export type WorkKind = 'design' | 'implement' | 'document' | 'investigate';
 
 export const WORK_KINDS: readonly WorkKind[] = ['design', 'implement', 'document', 'investigate'];
 
+/**
+ * How far verification may go, stored on the Task so dispatch never re-parses the Plan (D-04).
+ * `visual` is the only profile that may set requiresTest=false; focused/broad keep an independent Test.
+ */
+export const VERIFICATION_PROFILES = ['visual', 'focused', 'broad'] as const;
+export type VerificationProfile = (typeof VERIFICATION_PROFILES)[number];
+
+export function isVerificationProfile(value: unknown): value is VerificationProfile {
+  return typeof value === 'string' && (VERIFICATION_PROFILES as readonly string[]).includes(value);
+}
+
 /** Canonical phase order per kind; a phase may move within this set, not outside it. */
 const WORK_KIND_PHASES: Readonly<Record<WorkKind, readonly TaskPhase[]>> = {
   design: ['clarify', 'analyze', 'design', 'review', 'settle'],
@@ -129,6 +140,8 @@ export interface TaskRow {
   readonly flowVersion: number;
   readonly reworkCount: number;
   readonly requiresTest: boolean;
+  /** null on Tasks created before the structured field; dispatch falls back to the Plan line. */
+  readonly verificationProfile: VerificationProfile | null;
   readonly goal: string;
   readonly scope: string;
   readonly acceptanceRefs: readonly string[];
@@ -168,6 +181,7 @@ export interface CreateTaskParams {
   readonly backlogIds?: readonly string[];
   readonly type: TaskType;
   readonly requiresTest: boolean;
+  readonly verificationProfile?: VerificationProfile | null;
   readonly workKind?: WorkKind;
   readonly flowVersion?: number;
   readonly initialPhase?: TaskPhase;
@@ -197,6 +211,7 @@ export interface UpdateTaskParams {
   readonly acceptanceRefs?: readonly string[];
   readonly basisRefs?: readonly string[];
   readonly requiresTest?: boolean;
+  readonly verificationProfile?: VerificationProfile | null;
 }
 
 export type InteractionState = 'pending' | 'resolved' | 'stale';
@@ -443,7 +458,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -587,6 +602,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   blockReason TEXT,
   completionResultId TEXT,
   dirtyBaseline TEXT,
+  verificationProfile TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -2429,6 +2445,22 @@ export class Store {
         taskId: params.id,
       });
     }
+    if (workKind !== 'implement' && params.verificationProfile != null) {
+      throw new StoreError('INVALID_ARGUMENT', `a ${workKind} Task cannot declare a verification profile`, {
+        taskId: params.id,
+      });
+    }
+    if (
+      workKind === 'implement' &&
+      params.verificationProfile != null &&
+      params.requiresTest !== (params.verificationProfile !== 'visual')
+    ) {
+      throw new StoreError(
+        'INVALID_ARGUMENT',
+        'visual requires requiresTest=false; focused and broad require requiresTest=true',
+        { taskId: params.id, verificationProfile: params.verificationProfile, requiresTest: params.requiresTest },
+      );
+    }
     const backlogIds = params.backlogIds ?? [];
     if (params.type === 'read' && backlogIds.length > 0) {
       throw new StoreError('INVALID_ARGUMENT', 'a read Task cannot implement backlog items', {
@@ -2458,11 +2490,12 @@ export class Store {
       const timestamp = this.clock();
       try {
         this.stmt(`INSERT INTO tasks
-           (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
-            workKind, flowVersion, reworkCount, requiresTest, goal, scope, acceptanceRefs, basisRefs,
+          (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
+            workKind, flowVersion, reworkCount, requiresTest, verificationProfile, goal, scope,
+            acceptanceRefs, basisRefs,
             planRef, authorizationRefs, phase, currentSessionIds, status, revision, summary,
             dirtyBaseline, sourceInputId, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?, ?)`,)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?, ?)`,)
           .run(
             params.id,
             params.projectId,
@@ -2474,6 +2507,7 @@ export class Store {
             params.workKind ?? (params.type === 'read' ? 'investigate' : 'implement'),
             params.flowVersion ?? 0,
             params.requiresTest ? 1 : 0,
+            params.verificationProfile ?? null,
             params.goal,
             params.scope,
             canonical(params.acceptanceRefs),
@@ -2605,10 +2639,27 @@ export class Store {
         });
       }
       const nextRequiresTest = params.requiresTest ?? task.requiresTest;
+      const nextProfile = params.verificationProfile ?? task.verificationProfile;
       if (task.workKind !== 'implement' && nextRequiresTest) {
         throw new StoreError('INVALID_ARGUMENT', `a ${task.workKind} Task cannot declare requiresTest`, {
           taskId: params.taskId,
         });
+      }
+      if (task.workKind !== 'implement' && nextProfile !== null) {
+        throw new StoreError('INVALID_ARGUMENT', `a ${task.workKind} Task cannot declare a verification profile`, {
+          taskId: params.taskId,
+        });
+      }
+      if (
+        task.workKind === 'implement' &&
+        nextProfile !== null &&
+        nextRequiresTest !== (nextProfile !== 'visual')
+      ) {
+        throw new StoreError(
+          'INVALID_ARGUMENT',
+          'visual requires requiresTest=false; focused and broad require requiresTest=true',
+          { taskId: params.taskId, verificationProfile: nextProfile, requiresTest: nextRequiresTest },
+        );
       }
       let reworkDelta = 0;
       if (task.flowVersion >= 1) {
@@ -2639,6 +2690,7 @@ export class Store {
          planRef = COALESCE(?, planRef), goal = COALESCE(?, goal), scope = COALESCE(?, scope),
          acceptanceRefs = COALESCE(?, acceptanceRefs), basisRefs = COALESCE(?, basisRefs),
          requiresTest = COALESCE(?, requiresTest),
+         verificationProfile = COALESCE(?, verificationProfile),
          reworkCount = reworkCount + ?,
          revision = revision + 1, updatedAt = ?
        WHERE id = ?`,)
@@ -2655,6 +2707,7 @@ export class Store {
           params.acceptanceRefs === undefined ? null : canonical(params.acceptanceRefs),
           params.basisRefs === undefined ? null : canonical(params.basisRefs),
           params.requiresTest === undefined ? null : params.requiresTest ? 1 : 0,
+          params.verificationProfile ?? null,
           reworkDelta,
           timestamp,
           params.taskId,
@@ -3531,6 +3584,14 @@ export class Store {
     });
   }
 
+  /** v20 → v21: the verification profile is a Task fact, not a Plan-text parse. */
+  private migrateV20ToV21(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'verificationProfile', 'TEXT');
+      this.db.exec('PRAGMA user_version = 21;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3673,6 +3734,7 @@ export class Store {
         [17, () => this.migrateV17ToV18()],
         [18, () => this.migrateV18ToV19()],
         [19, () => this.migrateV19ToV20()],
+        [20, () => this.migrateV20ToV21()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3932,6 +3994,7 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     flowVersion: Number(row['flowVersion'] ?? 0),
     reworkCount: Number(row['reworkCount'] ?? 0),
     requiresTest: Number(row['requiresTest']) === 1,
+    verificationProfile: isVerificationProfile(row['verificationProfile']) ? row['verificationProfile'] : null,
     goal: String(row['goal']),
     scope: String(row['scope']),
     acceptanceRefs: parseStringList(row['acceptanceRefs']),

@@ -94,6 +94,8 @@ function tool(tools: readonly DomainTool[]): DomainTool {
 const PLAN = '# original plan\n\n## 验收\n- observable result\n';
 
 function createArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const workKind = overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement');
+  const requiresTest = 'requiresTest' in overrides ? overrides.requiresTest : workKind === 'implement' ? true : undefined;
   return {
     op: 'create',
     type: 'write',
@@ -101,8 +103,13 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
     scope: 'account module',
     planMarkdown: PLAN,
     authorizationRef: { inputId: 'i-dec' },
-    requiresTest: true,
-    workKind: overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement'),
+    workKind,
+    ...(workKind === 'implement'
+      ? {
+          requiresTest,
+          verificationProfile: requiresTest === false ? 'visual' : 'focused',
+        }
+      : {}),
     ...overrides,
   };
 }
@@ -676,4 +683,129 @@ describe('workKind contract', () => {
     expect(w.store.listTasks(w.projectId)[0]?.workKind).toBe('investigate');
   });
 });
+});
+
+describe('verification profile contract', () => {
+  it('requires a profile and a matching test decision', async () => {
+    const w = world();
+    const missing = await tool(w.tools).execute('c1', createArgs({ workKind: 'implement', verificationProfile: undefined }));
+    expect(missing.isError).toBe(true);
+    expect(missing.details['missing']).toBe('verificationProfile');
+
+    const visualWithTest = await tool(w.tools).execute(
+      'c2',
+      createArgs({ verificationProfile: 'visual', requiresTest: true }),
+    );
+    expect(visualWithTest.isError).toBe(true);
+    expect(visualWithTest.details['verificationProfile']).toBe('visual');
+
+    const codeWithoutTest = await tool(w.tools).execute(
+      'c3',
+      createArgs({ verificationProfile: 'focused', requiresTest: false }),
+    );
+    expect(codeWithoutTest.isError).toBe(true);
+    expect(codeWithoutTest.details['requiresTest']).toBe(false);
+  });
+
+  it('rejects a structured profile that disagrees with the Plan, and stores the agreed one', async () => {
+    const w = world();
+    const conflicting = await tool(w.tools).execute(
+      'c1',
+      createArgs({
+        verificationProfile: 'focused',
+        planMarkdown: `${PLAN}Verification profile: **broad**\n`,
+      }),
+    );
+    expect(conflicting.isError).toBe(true);
+    expect(conflicting.details['declared']).toBe('broad');
+
+    const created = await tool(w.tools).execute(
+      'c2',
+      createArgs({
+        verificationProfile: 'broad',
+        planMarkdown: `${PLAN}Verification profile: **broad**\n`,
+      }),
+    );
+    expect(created.isError).toBe(false);
+    expect(w.store.getTask(String(created.details['taskId']))?.verificationProfile).toBe('broad');
+    const got = await tool(w.tools).execute('c3', { op: 'get' });
+    expect((got.details['task'] as { verificationProfile?: string } | undefined)?.verificationProfile).toBe('broad');
+  });
+
+  it('keeps a revised Plan and a stored profile in step', async () => {
+    const w = world();
+    const created = await tool(w.tools).execute('call-1', createArgs());
+    const taskId = String(created.details['taskId']);
+    const drifted = await tool(w.tools).execute('call-2', {
+      op: 'update',
+      taskId,
+      changes: { planMarkdown: `${PLAN}Verification profile: broad\n` },
+    });
+    expect(drifted.isError).toBe(true);
+    expect(drifted.details['declared']).toBe('broad');
+
+    const droppedTest = await tool(w.tools).execute('call-2b', {
+      op: 'update',
+      taskId,
+      changes: { requiresTest: false },
+    });
+    expect(droppedTest.isError).toBe(true);
+    expect(droppedTest.details['requiresTest']).toBe(false);
+
+    const escalated = await tool(w.tools).execute('call-3', {
+      op: 'update',
+      taskId,
+      changes: {
+        requiresTest: false,
+        verificationProfile: 'visual',
+        planMarkdown: `${PLAN}Verification profile: visual\n`,
+      },
+    });
+    expect(escalated.isError).toBe(false);
+    expect(w.store.getTask(taskId)?.verificationProfile).toBe('visual');
+    expect(w.store.getTask(taskId)?.requiresTest).toBe(false);
+  });
+
+  it('refuses to change a legacy Task without stating its profile', async () => {
+    const w = world();
+    const legacy = w.store.createTask({
+      id: 't-legacy',
+      projectId: w.projectId,
+      chiefSessionId: w.sessionId,
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'old work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: join(w.serverWorkDir, 'legacy.md'), sha256: 'legacy' },
+      authorizationRefs: ['input:i-dec'],
+      sourceInputId: 'i-1',
+    });
+    const refused = await tool(w.tools).execute('call-1', {
+      op: 'update',
+      taskId: legacy.id,
+      changes: { requiresTest: false },
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.details['missing']).toBe('verificationProfile');
+
+    // A Plan-only rewrite that introduces a declaration cannot leave a legacy row unpaired.
+    const planOnly = await tool(w.tools).execute('call-2', {
+      op: 'update',
+      taskId: legacy.id,
+      changes: { planMarkdown: `${PLAN}Verification profile: **broad**\n` },
+    });
+    expect(planOnly.isError).toBe(true);
+    expect(planOnly.details['missing']).toBe('verificationProfile');
+
+    const plainPlan = await tool(w.tools).execute('call-3', {
+      op: 'update',
+      taskId: legacy.id,
+      changes: { planMarkdown: `${PLAN}no declaration\n` },
+    });
+    expect(plainPlan.isError).toBe(false);
+    expect(w.store.getTask(legacy.id)?.verificationProfile).toBeNull();
+  });
 });

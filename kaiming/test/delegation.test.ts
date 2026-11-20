@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store, type TaskRow } from '../src/store/store.ts';
-import { buildDispatchEnvelope, type DelegationReturn, type DispatchEnvelopeFacts } from '../src/tools/delegation-tools.ts';
+import { buildDispatchEnvelope, resolveVerificationProfile, type DelegationReturn, type DispatchEnvelopeFacts } from '../src/tools/delegation-tools.ts';
 import { createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 
 const dirs: string[] = [];
@@ -110,6 +110,7 @@ async function fixture(
     planMarkdown,
     authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
+    verificationProfile: 'focused',
   });
   // The stub returns a settled snapshot by default so tests can assert what the tool forwards.
   state.settle = {
@@ -195,9 +196,9 @@ describe('task dispatch', () => {
     expect(delivered).toContain('implement the reset flow');
     expect(delivered).toContain('Goal: reset password');
     expect(delivered).toContain('.dev/work/');
-    expect(delivered).toContain('Acceptance (from the Plan): - observable result');
+    expect(delivered).toContain('Acceptance (from the Plan; the verification profile bounds what this dispatch must run): - observable result');
     expect(delivered).toContain('Scope: not declared');
-    expect(delivered).toContain('Verification profile: none declared in the Plan; treat it as focused');
+    expect(delivered).toContain('Verification profile (from the Task): focused');
     expect(delivered).not.toContain('Scope: Scope');
     expect(delivered).toContain('Assigned writeScope: src/');
     expect(delivered).toContain('expected kind: "implementation"');
@@ -206,49 +207,69 @@ describe('task dispatch', () => {
     expect(delivered).not.toContain('Upstream results:');
   });
 
-  it('injects the Plan verification profile into the developer input', async () => {
+  it('reads the Task profile even when the Plan declares the same value', async () => {
     const f = await fixture('verification profile: focused\n\n## 验收\n- observable result\n');
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
     await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
     const developer = f.store.listTaskSessions(task?.id ?? '')[0];
     const delivered = payloadText(f.store.getInput(developer?.currentInputId ?? '')?.payload);
-    expect(delivered).toContain('Verification profile (from the Plan): focused');
-    expect(delivered).toContain('does not widen it; report the conflict');
+    expect(delivered).toContain('Verification profile (from the Task): focused');
+    expect(delivered).toContain('does not widen it; run only the profile\'s checks');
   });
 
+  it('keeps the stored profile authoritative and falls back to the Plan only for a legacy Task', () => {
+    expect(
+      resolveVerificationProfile(baseTask({ verificationProfile: 'focused' }), 'Verification profile: broad\n'),
+    ).toEqual({ profile: 'focused', fromTask: true });
+    expect(resolveVerificationProfile(baseTask(), 'Verification profile: **broad**\n')).toEqual({
+      profile: 'broad',
+      fromTask: false,
+    });
+    expect(resolveVerificationProfile(baseTask(), '# plan without a declaration\n')).toEqual({
+      profile: null,
+      fromTask: false,
+    });
+  });
+
+function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
+  return {
+    id: 't-1',
+    projectId: 'p-1',
+    chiefSessionId: 'c-1',
+    ownerEpoch: 1,
+    requirementId: null,
+    backlogIds: [],
+    type: 'write',
+    workKind: 'implement',
+    flowVersion: 1,
+    reworkCount: 0,
+    requiresTest: true,
+    verificationProfile: null,
+    goal: 'implement the reset flow',
+    scope: 'account',
+    acceptanceRefs: [],
+    basisRefs: [],
+    planRef: null,
+    authorizationRefs: ['i-dec'],
+    phase: 'develop',
+    currentSessionIds: [],
+    status: 'active',
+    revision: 1,
+    summary: '',
+    nextStep: null,
+    blockReason: null,
+    completionResultId: null,
+    dirtyBaseline: null,
+    sourceInputId: 'i-dec',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
   it('does not claim a profile for other roles, other work kinds, or an unevaluated dispatch', () => {
-    const task: TaskRow = {
-      id: 't-1',
-      projectId: 'p-1',
-      chiefSessionId: 'c-1',
-      ownerEpoch: 1,
-      requirementId: null,
-      backlogIds: [],
-      type: 'write',
-      workKind: 'implement',
-      flowVersion: 1,
-      reworkCount: 0,
-      requiresTest: true,
-      goal: 'implement the reset flow',
-      scope: 'account',
-      acceptanceRefs: [],
-      basisRefs: [],
-      planRef: null,
-      authorizationRefs: ['i-dec'],
-      phase: 'develop',
-      currentSessionIds: [],
-      status: 'active',
-      revision: 1,
-      summary: '',
-      nextStep: null,
-      blockReason: null,
-      completionResultId: null,
-      dirtyBaseline: null,
-      sourceInputId: 'i-dec',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    };
+    const task = baseTask();
     const envelope = (
       roleId: string,
       expectedKind: string,
@@ -261,15 +282,15 @@ describe('task dispatch', () => {
         { upstream: [], ...facts },
       );
 
-    const focused = envelope('developer', 'implementation', {}, { verificationProfile: 'focused' });
-    expect(focused).toContain('Verification profile (from the Plan): focused');
-    expect(focused).toContain('does not widen it; report the conflict');
+    const focused = envelope('developer', 'implementation', {}, { verificationProfile: 'focused', verificationProfileFromTask: true });
+    expect(focused).toContain('Verification profile (from the Task): focused');
+    expect(focused).toContain('does not widen it; run only the profile\'s checks');
     expect(focused).not.toContain('allowed with the reason');
 
-    const tester = envelope('tester', 'test', {}, { verificationProfile: 'focused' });
-    expect(tester).toContain('verify only this acceptance and related regression');
+    const tester = envelope('tester', 'test', {}, { verificationProfile: 'focused', verificationProfileFromTask: true });
+    expect(tester).toContain('verify only this acceptance');
 
-    const broad = envelope('developer', 'implementation', {}, { verificationProfile: 'broad' });
+    const broad = envelope('developer', 'implementation', {}, { verificationProfile: 'broad', verificationProfileFromTask: true });
     expect(broad).toContain('allowed with the reason');
 
     // Negative controls: the fact follows the member and work kind, not every dispatch.
@@ -295,6 +316,7 @@ describe('task dispatch', () => {
       flowVersion: 1,
       reworkCount: 0,
       requiresTest: false,
+      verificationProfile: null,
       goal: 'design the reset flow',
       scope: 'account',
       acceptanceRefs: [],

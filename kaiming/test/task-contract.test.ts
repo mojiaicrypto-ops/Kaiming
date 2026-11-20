@@ -67,15 +67,22 @@ function world(): World {
 }
 
 function createArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const workKind = overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement');
+  const requiresTest = 'requiresTest' in overrides ? overrides.requiresTest : workKind === 'implement' ? false : undefined;
   return {
     op: 'create',
     type: 'write',
     goal: '重置密码',
     scope: '账号模块',
     planMarkdown: PLAN,
-    requiresTest: false,
-    workKind: overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement'),
     authorizationRef: { inputId: 'i-dec' },
+    workKind,
+    ...(workKind === 'implement'
+      ? {
+          requiresTest,
+          verificationProfile: requiresTest === true ? 'focused' : 'visual',
+        }
+      : {}),
     ...overrides,
   };
 }

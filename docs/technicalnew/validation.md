@@ -171,3 +171,11 @@
 - **实现**：动作包进 `.sx-group`，静止 `max-width: 0; overflow: hidden`，行悬停、键盘 `:has(:focus-visible)` 或清理确认态展开到行宽（`max-width: 100%`），`hover: none` 触屏常驻；按钮的键盘焦点改为内嵌 accent 环，避免被组裁剪。行为、testid、事件与当前会话排除不变；浏览器用例在点击动作前先悬停所在行。
 - **证据**：真实 Chromium 四个受影响的用例通过（改名、清理含忙会话拒绝、归档/恢复、分支）；静止组宽 0、悬停 111.31px 无裁剪；确认态 161.89px（内容 162px，亚像素差），按钮右边 = 行右边 227 < 列右边 240；`hover: none` 下计算值 `max-width: none`；`webapp` typecheck/build 通过。独立 Review 首轮 NEEDS_FIX（确认文字被 148px 上限裁剪、焦点环被 `overflow: hidden` 裁掉），修正后复核。
 - **边界**：未加菜单/弹层状态；悬停展开期间标题临时截断是取舍；触屏移动端形态仍按缺口登记 M1–M5 重做。
+
+### 2026-11-20 · 验证档结构化与最小充分验证
+
+- **问题**：`focused` 必须独立 Test 的规则与 `chief.md:51` 只给“API E2E / 浏览器 E2E”两个入口，使小改动被派成整套端到端；同时 `verification profile` 只靠 Markdown 正则识别，`Verification profile: **broad**` 不匹配（本仓库 P0-1～P1-1 的 Plan 都这么写），broad 被信封静默降为 focused。`task(op=create)` 只有 `requiresTest`，档位不是程序事实。
+- **决定**：用户 2026-11-20 拍板方案 C：保留 visual/focused/broad 三档与 focused/broad 的独立 Test，只锁死“能观测被改契约的最小真实入口”；档位升级为 Task 结构化字段；开发者的变异只用于自己的 TDD，只读 Tester 用非法输入/越界请求/错误预期做负证。
+- **实现**：Store schema v21 增加 `tasks.verificationProfile`（SCHEMA_SQL 与迁移同时具备）；`task(op=create/update)` 对 implement 必填档位，校验 `visual↔requiresTest=false`、`focused/broad↔true`，Plan 声明（允许 bold/italic/反引号）不一致即拒绝；旧 Task 只改 Plan 并新增声明时要求同时给出结构化档位；派发信封读 Task 字段，旧行回退 Plan 并标明来源，验收行与上限句明确覆盖 `## 验收`/`## 验证`。chief v11、developer v7、tester v6、reviewer v6、D-04/D-05、G2 同步；无新档、无自然语言审查。
+- **证据**：`tsc` 通过；全量 68 文件 697 通过；`check:prompts` 15/15；`task-tools`/`delegation`/`store`/`plan-contract` 定向通过（含旧行三条路径、v20→v21、bold 解析）。独立 Review Round 1 NEEDS_FIX（旧行仅改 Plan 可形成 broad 无 Test），修复后 Round 2 PASS；独立 Test passed：真实 task 工具覆盖创建拒绝矩阵、旧行 update、派发来源与上限句、迁移与解析器，并在 `/tmp` 副本删除旧行守卫后对应用例按预期变红（`test.md`）。
+- **边界**：宿主不审查 Plan/派发的自然语言，验收原文仍下发；实际约束依赖档位上限句与冲突报告。旧 Task 不回填；生产库未迁移；提示词按进程缓存，重启后生效。

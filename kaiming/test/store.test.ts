@@ -962,6 +962,75 @@ describe('startup scan and abandoned questions', () => {
     expect(migrated.getTask('t-baseline')?.dirtyBaseline).toEqual(baseline);
   });
 
+  it('migrates a v20 database by adding the verification profile and round-trips it', () => {
+    const { store, path } = openStore();
+    seed(store);
+    // A real v20 row: a Task created before the column existed (it becomes NULL after migration).
+    store.createTask({
+      id: 't-old',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'old work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/old.md', sha256: 'o' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    store.controlTask({ taskId: 't-old', command: 'cancel' });
+    closeStore(store);
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE tasks DROP COLUMN verificationProfile');
+    raw.exec('PRAGMA user_version = 20');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    // The pre-migration row survives with no profile: dispatch falls back to its Plan line.
+    expect(migrated.getTask('t-old')).toMatchObject({ goal: 'old work', verificationProfile: null });
+    const created = migrated.createTask({
+      id: 't-profile',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      verificationProfile: 'focused',
+      goal: 'profiled work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/p.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    expect(created.verificationProfile).toBe('focused');
+    expect(migrated.getTask('t-profile')?.verificationProfile).toBe('focused');
+    expect(() =>
+      migrated.createTask({
+        id: 't-mismatch',
+        projectId: 'p-1',
+        chiefSessionId: 's-1',
+        ownerEpoch: 1,
+        type: 'write',
+        requiresTest: true,
+        verificationProfile: 'visual',
+        goal: 'mismatch',
+        scope: 'x',
+        acceptanceRefs: [],
+        basisRefs: [],
+        planRef: { storage: 'server', path: '/tmp/m.md', sha256: 'm' },
+        authorizationRefs: [],
+        sourceInputId: 'i-1',
+      }),
+    ).toThrow(/visual requires requiresTest=false/);
+  });
+
   it('freezes each workKind phase chain and counts backward moves as rework', () => {
     const { store } = openStore();
     seed(store);
