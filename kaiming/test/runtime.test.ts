@@ -14,6 +14,11 @@ import { SessionRegistry } from '../src/runtime/registry.ts';
 import { InputRunner, boundaryPersistedOnDisk, type RunOutcome } from '../src/runtime/runner.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
 import { REPORT_FAILURE_LIMIT, REPORT_RETRY_EXHAUSTED } from '../src/runtime/model-output-guard.ts';
+import {
+  createSandboxRuntime,
+  detectSandboxBackend,
+  type SandboxMode,
+} from '../src/runtime/os-sandbox.ts';
 
 /** The role prompts the server ships (docs/technicalnew/prompts). */
 const PROMPT_DIR = join(
@@ -76,6 +81,8 @@ async function harness(options: {
   onRunSettled?: (sessionId: string, outcome: RunOutcome) => void;
   /** Raw Pi event stream, for tests that assert what the browser would never see. */
   onEvent?: (sessionId: string, event: unknown) => void;
+  /** Run the chief in the OS sandbox; default tests leave it absent for their own contract. */
+  sandboxMode?: SandboxMode;
 }): Promise<Harness> {
   const server = await startStubModelServer(options.replies);
   servers.push(server);
@@ -83,6 +90,14 @@ async function harness(options: {
     ...(options.modelIds !== undefined ? { modelIds: options.modelIds } : {}),
     ...(options.reasoning === true ? { reasoning: true } : {}),
   });
+  const sandbox = options.sandboxMode === undefined
+    ? undefined
+    : await createSandboxRuntime({
+        dataDir: join(env.root, 'sandbox-data'),
+        agentDir: env.agentDir,
+        tempRoot: join(env.root, 'sandbox-tmp'),
+        mode: options.sandboxMode,
+      });
   dirs.push(env.root);
   const store = new Store({ path: join(env.root, 'state.db'), serverEpoch: 1 });
   stores.push(store);
@@ -120,6 +135,7 @@ async function harness(options: {
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
     ...(options.bashTimeoutSeconds !== undefined ? { bashTimeoutSeconds: options.bashTimeoutSeconds } : {}),
+    ...(sandbox !== undefined ? { sandbox } : {}),
     ...(options.onRunSettled !== undefined ? { onRunSettled: options.onRunSettled } : {}),
     ...(options.onEvent !== undefined
       ? { onEvent: (sessionId: string, event: unknown) => options.onEvent?.(sessionId, event) }
@@ -1242,6 +1258,62 @@ describe('input runner', () => {
     expect(outcome.kind).toBe('completed');
     const observed = JSON.stringify(h.registry.get('s-dev')?.session.messages ?? []);
     expect(observed).toContain('timed out after 1 seconds');
+  }, 30_000);
+
+  it.skipIf(detectSandboxBackend() === 'none')(
+    'refuses a chief project write inside the OS sandbox',
+    async () => {
+      const replies: StubReply[] = [];
+      const h = await harness({ replies, sandboxMode: 'auto' });
+      replies.push(
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'bash',
+              arguments: JSON.stringify({ command: `touch ${join(h.cwd, 'sandbox-evil.ts')}` }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'denied' },
+      );
+      const outcome = await h.runner.runNext('s-1');
+      expect(outcome.kind).toBe('completed');
+      const result = (h.registry.get('s-1')?.session.messages ?? []).find(
+        (message) => message.role === 'toolResult',
+      ) as { isError?: boolean; content?: unknown } | undefined;
+      expect(result?.isError).toBe(true);
+      expect(JSON.stringify(result?.content)).toMatch(/not permitted|sandbox|not available/);
+      expect(existsSync(join(h.cwd, 'sandbox-evil.ts'))).toBe(false);
+    },
+    30_000,
+  );
+
+  it('runs the explicit off path unsandboxed and still audits the chief', async () => {
+    const replies: StubReply[] = [];
+    const h = await harness({ replies, sandboxMode: 'off' });
+    execFileSync('git', ['init', '--quiet'], { cwd: h.cwd });
+    const target = join(h.cwd, 'off-path.txt');
+    replies.push(
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'bash',
+            arguments: JSON.stringify({ command: `printf off > ${JSON.stringify(target)}` }),
+          },
+        ],
+      },
+      { kind: 'text', text: 'wrote in off mode' },
+    );
+    const outcome = await h.runner.runNext('s-1');
+    expect(outcome.kind).toBe('completed');
+    expect(readFileSync(target, 'utf8')).toBe('off');
+    const result = (h.registry.get('s-1')?.session.messages ?? []).find(
+      (message) => message.role === 'toolResult',
+    ) as { isError?: boolean; content?: unknown } | undefined;
+    expect(result?.isError).toBe(true);
+    expect(JSON.stringify(result?.content)).toContain('chief shell audit');
   }, 30_000);
 
   it('lets the designer move and delete documents through the shell', async () => {

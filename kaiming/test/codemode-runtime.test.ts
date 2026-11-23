@@ -13,6 +13,7 @@ import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
 import { InputRunner } from '../src/runtime/runner.ts';
 import { readPiHistory } from '../src/server/history.ts';
+import { createSandboxRuntime, detectSandboxBackend, type SandboxMode } from '../src/runtime/os-sandbox.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
 
 const PROMPT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'technicalnew', 'prompts');
@@ -29,6 +30,7 @@ async function harness(options: {
   readonly replies: StubReply[];
   readonly roleId: string;
   readonly taskType?: 'read' | 'write';
+  readonly sandboxMode?: SandboxMode;
 }): Promise<{ readonly store: Store; readonly runner: InputRunner; readonly cwd: string; readonly agentDir: string }> {
   const server = await startStubModelServer(options.replies);
   cleanups.push(async () => {
@@ -38,6 +40,14 @@ async function harness(options: {
   cleanups.push(() => {
     rmSync(env.root, { recursive: true, force: true });
   });
+  const sandbox = options.sandboxMode === undefined
+    ? undefined
+    : await createSandboxRuntime({
+        dataDir: join(env.root, 'sandbox-data'),
+        agentDir: env.agentDir,
+        tempRoot: join(env.root, 'sandbox-tmp'),
+        mode: options.sandboxMode,
+      });
   const store = new Store({ path: join(env.root, 'state.db'), serverEpoch: 1 });
   cleanups.push(() => {
     store.close();
@@ -68,6 +78,7 @@ async function harness(options: {
     factory,
     resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server: defaults }),
     taskTypeOf: () => options.taskType,
+    ...(sandbox !== undefined ? { sandbox } : {}),
   });
   return { store, runner, cwd: env.cwd, agentDir: env.agentDir };
 }
@@ -160,3 +171,33 @@ describe('codemode in a real run', () => {
     expect(existsSync(escapePath)).toBe(false);
   });
 });
+
+  it.skipIf(detectSandboxBackend() === 'none')(
+    'applies the OS sandbox to a nested codemode bash call',
+    async () => {
+      const replies: StubReply[] = [];
+      const h = await harness({ replies, roleId: 'developer', taskType: 'write', sandboxMode: 'auto' });
+      const escapePath = join(h.cwd, '..', 'codemode-escape.ts');
+      replies.push(
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'codemode',
+              arguments: JSON.stringify({
+                code: `const run = await tools.bash({ command: ${JSON.stringify(`touch ${JSON.stringify(escapePath)}`)} });\nif (run.exit_code !== 0) throw new Error('sandboxed bash was denied');\nreturn 'allowed';`,
+              }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'The nested bash was denied.' },
+      );
+      const outcome = await h.runner.runNext('s-1');
+      expect(outcome.kind).toBe('completed');
+      const result = codemodeResult(h.store, h.agentDir);
+      expect(result?.isError).toBe(true);
+      expect(result?.text).toMatch(/not permitted|sandbox|not available/);
+      expect(existsSync(escapePath)).toBe(false);
+    },
+    30_000,
+  );

@@ -60,6 +60,8 @@
 ## U4 组件
 
 `app/`：TopBar、StatusBar、ProjectDialog、Drawer、State（状态符号+词）、router。
+
+状态栏的沙箱徽标显示 `sandbox{mode,backend,active,reason}`：数据来自 `session.get` / `session.stream.prepare` 的实时启动探针状态，不读历史输入的 `config`。`off` 显示「保护已关闭」，`auto`/`strict` 不可用显示「沙箱不可用」并带原因；页面切换会话时以新快照为准，不沿用旧值。
 `chat/`：SessionsList、Banner、TaskStrip、TaskTodo、Transcript、MessageItem、ThinkingBlock、Markdown、ToolCard、ToolTask、ToolBusiness（question / report / backlog）、InteractionPanel、QueuedInputs、Composer、EmptyState、MemberDrawer、TaskDrawer。
 `files/`：FileViewer（唯一文件查看画布）、SourceView（源码视图：行号 + 高亮 + 查找）、MarkdownView（`.md` 渲染/源码两态）、file-kind（按扩展名决定显示方式与语法）、link-target（链接归属解析）、paths（路径与字节地址助手）；`lib/highlight.ts` 是唯一语法注册表。
 `project/`：ProjectPage（问题提示、进行中、待办、模块、早期文件）、BacklogDrawer（详情与编辑）、project-model（分组、等你决定、模块截取、冲突草稿）。

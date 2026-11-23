@@ -148,11 +148,11 @@ cd <repository-directory>
 ./scripts/start.sh
 ```
 
-`setup.sh` installs server and webapp dependencies, builds the static frontend (`kaiming/web-static`), generates a random access password in `kaiming/.env` (mode `600`, gitignored), and prints the local URL and login password.
+`setup.sh` installs server and webapp dependencies, builds the static frontend (`kaiming/web-static`), generates a random access password in the data-directory `.env` (new installs: `kaiming/.kaiming-data/.env`; legacy `kaiming/.env` is accepted; mode `600`, gitignored), and prints the local URL and login password.
 
 ### 3. Sign In & Configure Models
 
-1. Open **`http://127.0.0.1:4173`** in your browser and sign in with the printed password (also stored as `KAIMING_ACCESS_PASSWORD` in `kaiming/.env`).
+1. Open **`http://127.0.0.1:4173`** in your browser and sign in with the printed password (also stored as `KAIMING_ACCESS_PASSWORD` in the actually loaded `.env`).
 2. Go to **Settings → Models**, add your model provider (Base URL, API protocol, API Key, and Model ID), and select a default model. You can also assign distinct models and thinking levels per specialist role.
 3. Open your local project directory and start collaborating with the Chief.
 
@@ -184,7 +184,7 @@ Add `kaiming` to your MCP client configuration:
       "command": "node",
       "args": ["/absolute/path/to/repo/kaiming/src/mcp/main.ts"],
       "env": {
-        "KAIMING_ACCESS_PASSWORD": "<same password as kaiming/.env>",
+        "KAIMING_ACCESS_PASSWORD": "<same password as the data-dir .env or legacy kaiming/.env>",
         "KAIMING_DATA_DIR": "/absolute/path/to/repo/kaiming/.kaiming-data",
         "KAIMING_MCP_PROJECT": "/absolute/path/to/your/project"
       }
@@ -200,8 +200,9 @@ Add `kaiming` to your MCP client configuration:
 ## 🔒 Security & Scope Boundaries
 
 - **Localhost by Default**: Listens only on `127.0.0.1:4173` out of the box. If you expose it remotely, put it behind a reverse proxy with HTTPS and access control.
-- **Role Isolation & Destructive-Command Confirmation**: File tools are strictly jailed to the active project directory (the workbench's private data directory is off-limits); the Chief has no file-write capability, its shell is for observation/operations and every call is audited for HEAD/worktree changes; chief commit/history/worktree-discard commands and specialist destructive commands (`rm`, `git reset --hard`, etc.) require explicit user confirmation in the browser.
-- **Not an OS Sandbox**: All roles' `bash` runs with the permissions of the OS user that launched Kaiming; the chief audit makes a change visible but cannot prevent it. Do not run untrusted third-party repositories without OS/container isolation.
+- **OS Sandbox by Default**: `KAIMING_SANDBOX=auto|strict|off` (default `auto`, applied on restart). `auto`/`strict` refuse `bash` when the backend is missing or the startup probe fails; there is no silent unsandboxed fallback. Only explicit `off` runs unsandboxed and is visibly marked as "protection off". The Chief's project and `.git` are read-only; designer/developer/tester may write the workspace but not `.git`; the settler may write `.git` but not hooks; reviewer/investigator/read Tasks have no bash. Workbench-private storage and the actual loaded `.env` are denied by the kernel.
+- **Sandbox boundary**: `auto` allows the Docker socket, `strict` denies it; both retain network and the SSH agent. This is a local filesystem boundary, not malware containment. A project's own `.env`, other home secrets, Docker mounts and remote side effects are outside it; use a container/VM/separate user for untrusted repositories. The Chief HEAD/status audit remains visibility only.
+- **Destructive confirmation**: with an active read-only sandbox, the Chief's commit/history/worktree-discard commands are refused before confirmation and point to the settler; only `off` keeps the old prompt. Specialist deletions still use the session prompt; `Trust all` only skips confirmation and never unlocks the kernel.
 - **Focused Single-User Workbench**: Built for individual developers and hands-on technical leads. Multi-tenant SaaS, team RBAC, and automated production deployment pipelines are out of scope.
 
 ---

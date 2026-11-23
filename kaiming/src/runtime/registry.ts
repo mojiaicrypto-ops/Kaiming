@@ -18,6 +18,7 @@ export interface LogicalSessionSpec {
   readonly extensionFactories?: CreateSessionOptions['extensionFactories'];
   readonly appendSystemPrompt?: CreateSessionOptions['appendSystemPrompt'];
   readonly tools?: CreateSessionOptions['tools'];
+  readonly sandboxKey?: string;
 }
 
 interface Registered {
@@ -49,6 +50,8 @@ export class SessionRegistry {
       config,
       tools: spec.tools ?? null,
       appendSystemPrompt: spec.appendSystemPrompt ?? null,
+      cwd: spec.cwd,
+      sandboxKey: spec.sandboxKey ?? null,
     });
     const existing = this.entries.get(spec.sessionId);
     if (existing !== undefined) {

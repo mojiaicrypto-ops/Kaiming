@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { RpcClient, RpcError, newRequestId, type UploadedAttachment } from '../api/rpc';
-import { SessionStream, type PreparedSnapshot, type StreamFrame, type PendingInteraction } from '../api/stream';
+import { SessionStream, type PreparedSnapshot, type SandboxStatusView, type StreamFrame, type PendingInteraction } from '../api/stream';
 import { emptySlot, slotReducer, type ContentBlock, type SessionSlot, type TaskDetail } from '../state/slot';
 import type { SessionActivity } from '../api/stream';
 import { toast } from '../lib/toast';
@@ -50,6 +50,8 @@ export interface ChiefSessionApi {
   readonly loadEarlier: (beforeEntryId: string) => Promise<boolean>;
   /** The model the running (or last) input was claimed with, or null when nothing has run. */
   readonly config: { providerId: string; modelId: string; source: string } | null;
+  /** Live service sandbox state, shown even before the session has run any input. */
+  readonly sandbox: SandboxStatusView | null;
   readonly activeTaskId: string | null;
   readonly retry: () => void;
   readonly notify: (text: string, kind?: 'info' | 'success' | 'error') => void;
@@ -87,6 +89,10 @@ export function useSession(
    * instead of being inferred from the current settings.
    */
   const [config, setConfig] = useState<{ providerId: string; modelId: string; source: string } | null>(null);
+  const [sandbox, setSandbox] = useState<SandboxStatusView | null>(null);
+  useEffect(() => {
+    setSandbox(null);
+  }, [session?.projectId, session?.sessionId]);
   /** Bumped by a retry button: restarts the effect even when the session did not change. */
   const [retryTick, setRetryTick] = useState(0);
   /**
@@ -222,6 +228,7 @@ export function useSession(
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
       setConfig(snapshot.config ?? null);
+      setSandbox(snapshot.sandbox ?? null);
       // The snapshot is the authority on "is something blocking this session": an event that
       // arrived before this tab subscribed would otherwise be lost forever.
       setBlocked(snapshot.blocked ?? null);
@@ -412,6 +419,7 @@ export function useSession(
             activity: SessionActivity;
             blocked: { code: string; detail: string } | null;
             config: { providerId: string; modelId: string; source: string } | null;
+            sandbox: SandboxStatusView | null;
           };
         }>(
           'session.get',
@@ -421,6 +429,7 @@ export function useSession(
           if (cancelled) return;
           setBlocked(read.session.blocked);
           if (read.session.config !== null) setConfig(read.session.config);
+          setSandbox(read.session.sandbox);
           // The queue may have drained into a run while no event reached this tab (an input row
           // changes without a Pi event in between): adopt the server's answer instead of waiting
           // for an event that may never be replayed.
@@ -446,6 +455,7 @@ export function useSession(
         .call<{
           session: {
             config: { providerId: string; modelId: string; source: string } | null;
+            sandbox: SandboxStatusView | null;
             blocked: { code: string; detail: string } | null;
           };
         }>('session.get', {
@@ -454,6 +464,7 @@ export function useSession(
         })
         .then((read) => {
           setConfig(read.session.config);
+          setSandbox(read.session.sandbox);
           // The run ended without starting, or it failed: the same read says which.
           setBlocked(read.session.blocked);
         })
@@ -519,6 +530,7 @@ export function useSession(
     refreshTask,
     loadEarlier,
     config,
+    sandbox,
     activeTaskId: taskForSession(activeTaskId, taskSessionId, sessionId),
     retry,
     notify: toast,

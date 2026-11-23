@@ -142,6 +142,7 @@ async function harness(
     hub,
     // The tests set this to model a run that cannot start.
     blockedOf: (sessionId) => blocks.get(sessionId) ?? null,
+    sandbox: () => ({ mode: 'auto', backend: 'sandbox-exec', active: true, reason: null }),
     epochOf: (sessionId) => epoch(sessionId),
     // What main.ts backs with the registry: occupancy from the live instance when there is one.
     contextOf: async (sessionId) => {
@@ -345,6 +346,7 @@ describe('session stream', () => {
     ]);
     expect((prepared.snapshot['inputs'] as Array<{ text?: string }>)[1]?.text).toBeUndefined();
     expect(prepared.snapshot['activity']).toBe('queued');
+    expect(prepared.snapshot['sandbox']).toMatchObject({ mode: 'auto', active: true });
     expect(prepared.snapshot['compacting']).toBe(false);
     expect(prepared.streamPath).toContain(`subscriptionId=${prepared.subscriptionId}`);
 

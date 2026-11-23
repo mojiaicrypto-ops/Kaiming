@@ -148,11 +148,11 @@ cd <repository-directory>
 ./scripts/start.sh
 ```
 
-`setup.sh` 会自动安装服务端与前端依赖、构建 Web 静态产物（`kaiming/web-static`），并在 `kaiming/.env` 中生成随机访问口令（权限 `600`）后打印登录地址和口令。
+`setup.sh` 会自动安装服务端与前端依赖、构建 Web 静态产物（`kaiming/web-static`），并在数据目录的 `.env`（新装为 `kaiming/.kaiming-data/.env`；旧 `kaiming/.env` 兼容）中生成随机访问口令（权限 `600`）后打印登录地址和口令。
 
 ### 3. 登录与配置模型
 
-1. 浏览器打开 **`http://127.0.0.1:4173`**，输入终端打印的访问口令（也可在 `kaiming/.env` 中查看 `KAIMING_ACCESS_PASSWORD`）。
+1. 浏览器打开 **`http://127.0.0.1:4173`**，输入终端打印的访问口令（也可在实际加载的 `.env` 中查看 `KAIMING_ACCESS_PASSWORD`）。
 2. 进入右上角 **Settings → Models**，添加模型服务商（Base URL、协议类型、API Key 与模型 ID）并设为默认模型；你也可以按角色分别指定不同模型与思考等级。
 3. 选择或接入你的本地项目目录，即可与主管开始对话。
 
@@ -184,7 +184,7 @@ git pull && ./scripts/setup.sh && ./scripts/start.sh
       "command": "node",
       "args": ["/absolute/path/to/repo/kaiming/src/mcp/main.ts"],
       "env": {
-        "KAIMING_ACCESS_PASSWORD": "<与 kaiming/.env 一致的口令>",
+        "KAIMING_ACCESS_PASSWORD": "<与数据目录 .env 或旧 kaiming/.env 一致的口令>",
         "KAIMING_DATA_DIR": "/absolute/path/to/repo/kaiming/.kaiming-data",
         "KAIMING_MCP_PROJECT": "/absolute/path/to/your/project"
       }
@@ -200,8 +200,9 @@ git pull && ./scripts/setup.sh && ./scripts/start.sh
 ## 🔒 安全与使用边界
 
 - **本地回环默认保护**：默认仅监听 `127.0.0.1:4173`。如需远程访问，请务必自行配置反向代理、HTTPS 与访问控制。
-- **角色权限隔离与高危确认**：所有角色的文件工具均被严格限制在当前项目目录内（禁止访问工作台私有数据目录）；主管无写文件能力，其 Shell 仅用于观察/运维（ssh、容器、端口、日志、git-ignored 本地环境文件），每次调用后宿主比较 HEAD 与工作区并告警；主管提交、历史改写与工作区丢弃命令、专业角色删除命令都需在浏览器端获得你的显式确认。
-- **非操作系统级沙箱**：所有角色的 `bash` 与启动工作台的系统用户同权限；主管的审计只让修改可见，不能阻止修改。请勿在未隔离环境中运行不可信第三方代码；需要硬隔离时使用容器或 OS 级沙箱。
+- **OS 执行沙箱默认开启**：`KAIMING_SANDBOX=auto|strict|off`（默认 `auto`，重启生效）。`auto`/`strict` 缺后端或启动探针失败时拒绝执行 `bash`，不静默降级；只有显式 `off` 允许无沙箱执行并在当前工作/会话详情标「保护已关闭」。主管的项目与 `.git` 只读；设计/开发/测试工作区可写、`.git` 只读；结算可写 `.git`、hooks 只读；审核/调查/read Task 无 bash。工作台私有存储与实际加载的 `.env` 均被内核屏蔽。
+- **沙箱边界**：`auto` 放行 Docker socket，`strict` 禁止；两者都保留网络与 SSH agent，因此这是本机文件系统边界，不是恶意代码隔离。项目自身 `.env`、home 下其他密钥、Docker 挂载与远端副作用不在此保护范围；不可信仓库请使用容器/VM/独立用户。主管的 HEAD/status 审计只保留可见性，不再作为主要边界。
+- **高危确认**：主管处于生效只读沙箱时，提交、历史改写与工作区丢弃直接拒绝并指向结算角色；只有 `off` 模式保留原确认。真正删除文件的专业命令仍按会话确认，`Trust all` 只免确认、不解锁内核权限。
 - **专注个人与单负责人深度交付**：当前定位为单用户自托管工作台，不包含多租户 SaaS、团队 RBAC 或自动化生产发布流水线。
 
 ---

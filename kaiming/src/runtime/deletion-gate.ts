@@ -252,6 +252,17 @@ export function deletionCommandReason(
   return undefined;
 }
 
+/** Why a command is a chief history action, independent of the deletion table. */
+export function historyCommandReason(command: string): string | undefined {
+  for (const segment of segmentsOf(command)) {
+    if (segment.trim() === '') continue;
+    for (const rule of HISTORY_RULES) {
+      if (rule.match(segment)) return rule.label;
+    }
+  }
+  return undefined;
+}
+
 /** The choices shown by the gate. `TRUST` covers every later shell call in this session. */
 const APPROVE_ONCE = 'Approve once';
 const TRUST_SESSION = 'Trust all commands in this session';
@@ -263,6 +274,8 @@ export interface DeletionGateOptions {
   readonly trust?: () => void;
   /** The chief's shell also asks before history/worktree-discard and commit commands. */
   readonly guardHistory?: boolean;
+  /** The chief is in an active read-only sandbox: history commands are refused, never prompted. */
+  readonly readOnlySandbox?: boolean;
 }
 
 /**
@@ -277,11 +290,22 @@ export function createDeletionGate(options: DeletionGateOptions = {}): Extension
   return (pi: ExtensionAPI): void => {
     let trustAll = options.isTrusted?.() === true;
     pi.on('tool_call', async (event: ToolCallEvent, ctx) => {
-      if (trustAll || options.isTrusted?.() === true) return undefined;
       if (!SHELL_TOOLS.has(event.toolName)) return undefined;
       const input = event.input as { command?: string };
       const command = input['command'];
       if (typeof command !== 'string' || command === '') return undefined;
+      if (options.readOnlySandbox === true) {
+        const history = historyCommandReason(command);
+        if (history !== undefined) {
+          return {
+            block: true,
+            reason:
+              `the chief read-only sandbox cannot run this history command (${history}); ` +
+              'the settlement commit belongs to the settler',
+          };
+        }
+      }
+      if (trustAll || options.isTrusted?.() === true) return undefined;
       const reason = deletionCommandReason(command, { guardHistory: options.guardHistory === true });
       if (reason === undefined) return undefined;
       if (!ctx.hasUI) {

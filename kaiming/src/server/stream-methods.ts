@@ -9,6 +9,7 @@ import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
+import type { SandboxStatus } from '../runtime/os-sandbox.ts';
 import { partsOfPayload } from '../runtime/input-text.ts';
 import type { ContextUsageView } from '../runtime/context-usage.ts';
 
@@ -29,6 +30,8 @@ export interface StreamMethodsOptions {
    */
   /** Why the session cannot run right now, if it cannot: a snapshot must not lose a block. */
   readonly blockedOf?: (sessionId: string) => { code: string; detail: string } | null;
+  /** Live service sandbox status; never derived from an input's recorded history. */
+  readonly sandbox?: () => SandboxStatus;
   readonly currentHistory?: (sessionId: string) => {
     records: readonly HistoryRecord[];
     problems?: readonly string[];
@@ -110,6 +113,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           // that is the running configuration, and after it ends it is what the last run really
           // used — which is how a reader notices that the settings no longer match the work.
           config: summarizeRecordedConfig(recordedConfigOf(inputs)),
+          sandbox: options.sandbox?.() ?? null,
           // How full the model's window is, as of this boundary: a reader who connects mid-run
           // must see the same number the meter had before the reconnect.
           context: contextUsage,

@@ -13,6 +13,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { expect, type Page } from '@playwright/test';
 import { startWorkbench } from '../src/server/main.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
+import type { SandboxMode } from '../src/runtime/os-sandbox.ts';
 
 const RPC_PATH = '/api/v1/rpc';
 const CSRF_HEADER = 'x-kaiming-csrf';
@@ -142,7 +143,11 @@ export async function seedProjectSession(
  * false, and hand back the origin plus the access password so a test can log in through the UI.
  */
 export async function startHarness(
-  options: { readonly seedProject?: boolean; readonly model?: readonly StubReply[] } = {},
+  options: {
+    readonly seedProject?: boolean;
+    readonly model?: readonly StubReply[];
+    readonly sandboxMode?: SandboxMode;
+  } = {},
 ): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'kaiming-browser-'));
   const dataDir = join(root, 'data');
@@ -159,6 +164,7 @@ export async function startHarness(
     port: 0,
     ...(stubEnv === undefined ? {} : { agentDir: stubEnv.agentDir }),
     ...(modelServer === undefined ? {} : { model: { providerId: 'stub', modelId: 'stub-1' } }),
+    ...(options.sandboxMode !== undefined ? { sandboxMode: options.sandboxMode } : {}),
   });
 
   let closed = false;

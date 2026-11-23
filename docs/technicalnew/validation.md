@@ -8,8 +8,8 @@
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **66 文件 / 632 用例通过**（SQLite WAL 接纳/认领/迁移至 v19、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限等，含负向控制与变异自检） |
-| **前端单元** | `npm --prefix kaiming/webapp test` | **20 文件 / 133 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、错误码映射等） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **71 文件 / 735 用例通过**（SQLite WAL 接纳/认领/迁移至 v19、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界等，含负向控制与变异自检） |
+| **前端单元** | `npm --prefix kaiming/webapp test` | **20 文件 / 140 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、错误码映射等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
 | **浏览器 E2E** | `npm --prefix kaiming run test:browser` | **Playwright 真实 Chromium + 真 Server 套件通过**（三屏导航、流式对话、提问答复、双击防重、断线恢复、项目看板、文件/报告画布、模型分层与思考等级、用量统计、会话归档、320/390px 窄屏无溢出等） |
@@ -188,3 +188,11 @@
 - **补强（Review）**：`status` 失败不再静默返回 null，而是 `statusAvailable:false` + `limited` 的观察并追加非错误提示；审计首句改为“project state changed while this command ran”，避免把并发成员/后台写入归因给当前命令；新增 developer `git commit` 不询问的运行时负向对照；中文 README 的角色权限行同步。
 - **证据**：`test/shell-audit.test.ts` 12/12（干净、已脏文件二次编辑、未跟踪新增/修改、commit、ignored、子目录项目、无 git、status 不可读、单侧 status 失败不伪造变化、HEAD 不可读不比较、扩展告警/`isError`）；`tool-sets` 15/15、`deletion-gate` 11/11、`deletion-gate-runtime` 5/5（含 developer `git commit` 不询问的负向对照）；`runtime.test.ts` 新增真实 Pi 用例（主管 bash 改 tracked 文件→审计告警；只读 `git status` 不告警；主管 `git commit` 询问并拒绝）；全量 69 文件 717/717；`tsc`；`check:prompts` 15/15。独立 Review 首轮 5 项、二轮单侧 status/HEAD 与命令替换门禁均修复，三轮 PASS；独立 Test PASS（frozen tree 43/43 focused、717/717 full，含 6 组变异与负向对照，见 `.dev/work/chief-shell-audit-20261121/{review,test}.md`）。
 - **边界**：审计不是沙箱，不能阻止修改；只覆盖本地项目根内、git 可见的状态。并发成员写入、`nohup` 后台、`ssh` 远端、`.git` 内部与 ignored 文件不被归因；未跟踪文件只比较 size/mtime；超大脏树可能 `limited`。`git commit` 的文本门禁可被 `ssh host 'git commit'`、`sh -c` 等绕过，HEAD 审计只让本地提交可见。需要“物理上改不了”时走后续 OS 沙箱方案。
+
+### 2026-11-23 · P3-1 OS 执行沙箱与角色边界
+
+- **问题**：P0/A 之后主管与专业角色的 `bash` 仍与启动用户同权限，文件工具边界只覆盖 read/write/edit/ls/find/grep；主管的 HEAD/status 审计只能事后可见，不能阻止项目源码或 `.env` 被读/写。产品 P-05 已确认执行沙箱目标，但实现缺失。
+- **决定**：用户 2026-11-23 确认 `auto|strict|off`：`auto`/`strict` 缺后端或启动探针失败即 fail-closed，只有 `off` 允许无沙箱并显示「保护已关闭」；`auto` 与 `strict` 仅 Docker socket 不同，二者保留网络与 SSH agent；主管只读、设计/开发/测试 workspace-write + `.git` 只读、结算 `.git` 可写/hooks 只读、审核/调查/read 无 bash；工作台加载的 `.env` 精确屏蔽，项目自身 `.env` 不误伤；主管 history 命令在只读沙箱下直接拒绝，不弹确认。
+- **实现**：新增 `os-sandbox.ts`（策略、真实探针、macOS SBPL、Linux bwrap、精确文件 stub、env allowlist）；`runner` 以原生 `createBashToolDefinition` 覆盖内建 bash，覆盖 `codemode` 嵌套调用；`deletion-gate` 增加 `historyCommandReason` 与 `readOnlySandbox`；`registry` 绑定 `cwd`/`sandboxKey`；`server/main` 在启动时构建运行时，`session.get`/`stream.prepare` 返回实时 `sandbox`，历史 `effectiveConfig.sandbox` 仅审计；`StatusBar` 显示实时徽标；`setup.sh`/`start.sh`/`package.json` 处理新数据目录 `.env` 与旧位置兼容；README/install/G1/runtime-contract/ui-design 与 chief/designer/developer/tester 提示词同步。
+- **证据**：`test/os-sandbox.test.ts` 11/11（真实内核：私密读、精确 `.env` 读写、项目外写、自举嵌套、developer `.git` 只读、settler commit/hooks、linked worktree settler commit、私密 Unix socket、nohup 后台完成、env allowlist、缺后端 fail-closed、伪 executor 探针）；`tool-guard` 15/15、`deletion-gate` 13/13、`runtime` 63/63、`server-read` 26/26、`server-stream` 13/13、`codemode-runtime` 4/4、`registry` 1/1、`workbench-entry` 6/6；全量 71 文件 735/735；`tsc`、webapp typecheck、`npm --prefix kaiming run build`；浏览器 `browser/sandbox-status.spec.ts` 2/2（off/auto 徽标）；`check:prompts` 15/15。独立 Review 首轮 NEEDS_FIX 的 6 项、linked-worktree settler 项均修复并复审 PASS；独立 Test 结果见 `.dev/work/p3-1-os-sandbox-20261123/{review,test}.md`。
+- **边界**：Linux `bwrap` 本机未安装，代码路径（精确文件 stub、挂载顺序、strict Docker）未在本机执行，探针会 fail-closed；网络、SSH、Docker（auto）、项目 `.env`、home 其他密钥和远端副作用不在边界内；macOS 不清理 `nohup`/`setsid` 孤儿进程；模式是服务端启动变量，无前端动态切换；提示词缓存需重启。它不是恶意代码隔离，不可信仓库使用容器/VM/独立用户。

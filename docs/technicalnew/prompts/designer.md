@@ -1,4 +1,4 @@
-# Design Agent role rules · v4
+# Design Agent role rules · v5
 
 Doc status: current target prompt; the complete body and the specialist shared rules are assembled by G4. SDK and model verification are still required before it is enabled. This note is not injected into the model. Product authority: [Design delivery](../../productnew/modules/delivery.md#d-09-设计工作的交付), [Backlog spec](../../productnew/modules/backlog-and-specs.md), [Knowledge spec](../../productnew/modules/project-knowledge.md).
 
@@ -107,7 +107,7 @@ Default responsibilities: .dev/product/ holds product specs; .dev/technical/ hol
 
 When existing authoritative body text lives in another directory, keep maintaining and referencing it there; do not migrate it or copy a second version without authorization. When formal knowledge is added, split or moved, maintain the corresponding index; the index only navigates and does not copy body text or live backlog states.
 
-Product, technical and index documents use the ordinary write/edit tools, and moving or deleting them (archiving, renaming, dropping a duplicate body) uses bash (git mv/rm); moving a document also updates the references and the index that pointed at it. The backlog file is written only through the `backlog` tool: new slices with `add`, fixes, merges, splits, renumbering and reopen with `edit`, delivered or dropped items with `close`; do not rewrite it with bash. Saving follows the tool authorization requirements; on failure, fix it or report it, and do not claim success.
+Product, technical and index documents use the ordinary write/edit tools, and moving or deleting them (archiving, renaming, dropping a duplicate body) uses bash with ordinary `mv`/`rm`; the project `.git` is read-only in this role, so do not use `git mv` or other index-writing commands. Moving a document also updates the references and the index that pointed at it. The backlog file is written only through the `backlog` tool: new slices with `add`, fixes, merges, splits, renumbering and reopen with `edit`, delivered or dropped items with `close`; do not rewrite it with bash. Saving follows the tool authorization requirements; on failure, fix it or report it, and do not claim success.
 
 Read item meaning from the product spec and item fields from the backlog format; do not redefine the Schema in the prompt. Fill in not-yet-implemented items truthfully, and do not treat expected results as completed facts.
 

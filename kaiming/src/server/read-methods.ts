@@ -22,6 +22,7 @@ import {
 } from '../runtime/backlog-store.ts';
 import { textOfPayload } from '../runtime/input-text.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
+import type { SandboxStatus } from '../runtime/os-sandbox.ts';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 /**
@@ -47,6 +48,8 @@ export interface ReadMethodsOptions {
    * happening" after a submit.
    */
   readonly blockedOf?: (sessionId: string) => { code: string; detail: string } | null;
+  /** Live service sandbox status; independent of any input's recorded history. */
+  readonly sandbox?: () => SandboxStatus;
 }
 
 export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptions): void {
@@ -235,7 +238,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       const id = `s-${digestOfText(`${project.id}:${Date.now()}:${Math.random()}`).slice(0, 12)}`;
       store.createSession({ id, projectId: project.id, roleId: 'chief', cwd: project.realPath });
       // Pi is created lazily: creating a session needs no model and writes nothing into the project.
-      return { session: requireSession(store, project.id, id) };
+      return { session: requireSession(store, project.id, id, undefined, options.sandbox) };
     },
   });
 
@@ -251,7 +254,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       const existing = store.getSessionByChannel(project.id, channel);
       if (existing !== undefined) {
-        return { session: requireSession(store, project.id, existing.id, options.blockedOf), created: false };
+        return { session: requireSession(store, project.id, existing.id, options.blockedOf, options.sandbox), created: false };
       }
       const id = `s-${digestOfText(`${project.id}:${channel}:${Date.now()}:${Math.random()}`).slice(0, 12)}`;
       try {
@@ -260,9 +263,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         // A concurrent open won the unique index: return the winner rather than a second session.
         const winner = store.getSessionByChannel(project.id, channel);
         if (winner === undefined) throw new RpcError('VERSION_CONFLICT', 'the channel session could not be opened');
-        return { session: requireSession(store, project.id, winner.id, options.blockedOf), created: false };
+        return { session: requireSession(store, project.id, winner.id, options.blockedOf, options.sandbox), created: false };
       }
-      return { session: requireSession(store, project.id, id, options.blockedOf), created: true };
+      return { session: requireSession(store, project.id, id, options.blockedOf, options.sandbox), created: true };
     },
   });
 
@@ -274,7 +277,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       if (sessionId === undefined) {
         throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
       }
-      return { session: requireSession(store, project.id, sessionId, options.blockedOf) };
+      return { session: requireSession(store, project.id, sessionId, options.blockedOf, options.sandbox) };
     },
   });
 
@@ -898,6 +901,7 @@ function requireSession(
   projectId: string,
   sessionId: string,
   blockedOf?: (sessionId: string) => { code: string; detail: string } | null,
+  sandboxOf?: () => SandboxStatus,
 ) {
   const session = store.getSession(sessionId);
   if (session === undefined || session.projectId !== projectId) {
@@ -922,6 +926,7 @@ function requireSession(
     stopping: live.activity === 'stopping',
     // Why nothing is running, if nothing is running because of a block.
     blocked: blockedOf?.(sessionId) ?? null,
+    sandbox: sandboxOf?.() ?? null,
     currentInputId: current?.inputId ?? null,
     // What this session is running with, from the claim's own record: a change in the settings
     // must be visible as a difference, not silently applied to work already running.

@@ -9,6 +9,7 @@
 - macOS 或 Linux（POSIX）；Windows 未验证。
 - Node.js **24 LTS**。推荐 24.22.1+；较早的 24.x 可以运行，但 `officeparser` 可能打印 engine warning。
 - npm（随 Node 安装）。
+- OS 沙箱后端：macOS 使用系统自带 `/usr/bin/sandbox-exec`；Linux 需要 `bubblewrap`（`bwrap`）。缺失时 `auto`/`strict` 会拒绝 `bash`（fail-closed），只有显式 `KAIMING_SANDBOX=off` 才允许无沙箱执行。
 - 一个可用的模型端点：OpenAI 兼容、Anthropic Messages 或本地 OpenAI 兼容服务。
 - 可选：Chromium，供 Agent 的浏览器工具使用；不装不影响其它功能。
 
@@ -27,7 +28,7 @@
 
 1. 在 `kaiming/` 和 `kaiming/webapp/` 安装依赖（有 lockfile 时使用 `npm ci`）；
 2. 构建 `kaiming/web-static/`；
-3. 如果 `kaiming/.env` 不存在，生成随机访问口令和本地配置，权限设为 600；
+3. 如果数据目录的 `.env`（新装为 `kaiming/.kaiming-data/.env`）和旧 `kaiming/.env` 都不存在，生成随机访问口令和本地配置，权限设为 600；
 4. 打印启动地址和口令。
 
 然后打开：
@@ -36,7 +37,7 @@
 http://127.0.0.1:4173
 ```
 
-输入 `kaiming/.env` 中的 `KAIMING_ACCESS_PASSWORD` 登录。
+输入实际加载的 `.env`（新装数据目录 `.env`，或旧 `kaiming/.env`）中的 `KAIMING_ACCESS_PASSWORD` 登录。
 
 重新运行 `setup.sh` 不会覆盖已有 `.env`，因此不会改变口令。升级代码后重新执行它即可刷新依赖和构建，首次启动时数据库会按需迁移。
 
@@ -151,7 +152,7 @@ OpenAI 兼容端点示例：
 
 - **项目目录**：工作台记录你选择的既有目录，不复制项目文件。
 - **浏览器构建**：`kaiming/web-static/`，由 `npm run build` 生成。
-- **启动配置**：`kaiming/.env`，与数据目录分开；备份数据时也要按密钥备份它。
+- **启动配置**：新装为数据目录的 `.env`（`kaiming/.kaiming-data/.env`），旧位置 `kaiming/.env` 仍兼容；实际加载的那份按精确文件受私有存储保护。
 
 不要把项目目录放进数据目录：工作台会把私有目录内的文件视为不可访问，导致项目工具被拒绝。
 
@@ -165,7 +166,7 @@ OpenAI 兼容端点示例：
 tar -czf kaiming-backup-$(date +%Y%m%d).tgz -C kaiming .kaiming-data
 ```
 
-同时按密钥保管 `kaiming/.env`。项目目录按你自己的方式备份，工作台不代管。
+新装的 `.env` 在数据目录内，随上面的 tar 一起备份；旧位置 `kaiming/.env` 仍需单独按密钥保管。项目目录按你自己的方式备份，工作台不代管。
 
 ### 恢复
 
@@ -199,7 +200,7 @@ git pull
       "command": "node",
       "args": ["/absolute/path/to/repo/kaiming/src/mcp/main.ts"],
       "env": {
-        "KAIMING_ACCESS_PASSWORD": "<same password as kaiming/.env>",
+        "KAIMING_ACCESS_PASSWORD": "<same password as the data-dir .env or legacy kaiming/.env>",
         "KAIMING_DATA_DIR": "/absolute/path/to/repo/kaiming/.kaiming-data",
         "KAIMING_MCP_PROJECT": "/absolute/path/to/your/project"
       }
@@ -220,11 +221,11 @@ git pull
 ## 9. 安全边界
 
 - 默认只监听回环地址。直接暴露到公网需要自行加 HTTPS、反向代理和访问控制；本项目不是托管多租户服务。
-- 访问口令只保存在 `kaiming/.env`；模型 key 保存在数据目录或服务端配置中。不要把 `.env`、`config/model.json` 或数据目录提交到 Git。
-- Agent 的 `bash` 与启动工作台的系统用户同权限。工作台没有操作系统级沙箱；不要把不可信仓库交给它执行，也不要授予不必要权限。
-- 主管的 `bash` 仅用于观察/运维：每次调用后宿主比较本地项目的 HEAD、status 与脏文件内容，发现变化就在工具结果中告警。该审计不是沙箱，不能阻止修改；并发成员写入、`nohup` 后台和 `ssh` 远端不在归因范围。主管的提交/历史改写/工作区丢弃命令以及专业角色删除命令仍需确认。
-- 真正删除文件的命令会先确认；确认框可选“仅本次”“本次会话完全信任”或“拒绝”。完全信任会让本会话后续所有 `bash` 命令（包括删除）不再询问，仅适合本机测试，进程重启或新建会话后恢复确认。
-- 模型的文件工具会拒绝读取服务器私有目录（数据目录、凭证、数据库、会话历史），但 `bash` 的刻意绕过仍需由操作系统权限约束。
+- 访问口令默认保存在数据目录的 `.env`（新装为 `kaiming/.kaiming-data/.env`）；`scripts/start.sh` 仍兼容旧位置 `kaiming/.env`。实际加载的那份 `.env` 会按精确文件加入私有屏蔽，自举开发本仓库时 read/grep/bash 也读不到它。模型 key 保存在数据目录或服务端配置中；不要把 `.env`、`config/model.json` 或数据目录提交到 Git。
+- 持有 `bash` 的角色默认在 OS 文件系统沙箱中执行：`KAIMING_SANDBOX=auto|strict|off`（默认 `auto`，服务端启动时读取，重启生效）。`auto`/`strict` 缺 macOS `sandbox-exec` 或 Linux `bwrap`、或启动探针失败时拒绝执行 `bash`，绝不静默降级；只有显式 `off` 允许无沙箱执行，并在当前工作/会话详情标「保护已关闭」。`auto` 放行 Docker socket，`strict` 禁止；两者都保留网络与 SSH agent，所以这是本机文件系统边界，不是恶意代码隔离。
+- 角色边界：主管项目与 `.git` 只读；设计/开发/测试工作区可写、项目 `.git` 只读；结算可写 `.git`、hooks 只读；审核/调查/read Task 无 bash。项目自身的 `.env`、home 下其他密钥、Docker 挂载和远端副作用不在保护范围；不可信仓库使用容器/VM/独立用户。
+- 主管的 `bash` 仍用于观察/运维；HEAD/status 审计保留为可见性，不替代沙箱。生效只读沙箱下，主管提交、历史改写与工作区丢弃直接拒绝并指向结算角色；只有 `off` 保留原确认。真正删除文件的专业命令仍按会话确认。
+- 工作台私有存储（数据目录、凭证、数据库、会话历史）和实际加载的工作台 `.env` 由文件工具与 OS 沙箱共同拒绝；`bash` 的刻意绕过不再只是权限约定。
 - 单用户设计；团队账号、RBAC、托管服务和自动多租户隔离不在当前范围。
 
 ## 10. 故障排查
@@ -232,7 +233,7 @@ git pull
 | 现象 | 处理 |
 |---|---|
 | `scripts/start.sh` 提示缺少 `.env` | 先运行 `./scripts/setup.sh`，或按手动步骤创建 `.env` |
-| 登录提示口令错误 | 查看 `grep KAIMING_ACCESS_PASSWORD kaiming/.env`；无 `.env` 时不会启动 |
+| 登录提示口令错误 | 查看实际加载的 `.env`：新装为 `kaiming/.kaiming-data/.env`，旧位置为 `kaiming/.env`；`grep KAIMING_ACCESS_PASSWORD` 该文件 |
 | 页面提示未构建 | 运行 `npm --prefix kaiming run build` |
 | 输入一直排队并提示 `MODEL_UNAVAILABLE` | 在 Settings → Models 配置并测试模型，或检查数据目录 `models.json` |
 | 浏览器工具返回 `BROWSER_UNAVAILABLE` | 在 `kaiming` 下运行 `npx playwright install chromium` |

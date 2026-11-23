@@ -179,7 +179,10 @@ async function harness(): Promise<Harness> {
     store,
     server: { model: { providerId: 'stub', modelId: 'stub-1' }, agentDir: root, promptDir: root, tools: [] },
   });
-  registerReadMethods(router, { store });
+  registerReadMethods(router, {
+    store,
+    sandbox: () => ({ mode: 'auto', backend: 'sandbox-exec', active: true, reason: null }),
+  });
   const workbench = createWorkbenchServer({ store, auth, router });
   const { origin } = await workbench.listen(0);
   cleanups.push(async () => {
@@ -758,11 +761,18 @@ describe('read-only query surface', () => {
 
     const running = await h.call('session.get', { projectId: h.projectId, sessionId: 's-busy' });
     const runningSession = resultOf<{
-      session: { activity: string; stopping: boolean; config: Record<string, unknown> | null };
+      session: {
+        activity: string;
+        stopping: boolean;
+        sandbox: { mode: string; active: boolean };
+        config: Record<string, unknown> | null;
+      };
     }>(running.body).session;
     expect(runningSession.activity).toBe('processing');
     expect(runningSession.stopping).toBe(false);
-    expect(runningSession.config).toEqual({ providerId: 'p-a', modelId: 'm-1', source: 'role' });
+    expect(runningSession.config).toEqual({ providerId: 'p-a', modelId: 'm-1', source: 'role', sandbox: null });
+
+    expect(runningSession.sandbox).toMatchObject({ mode: 'auto', active: true });
 
     h.store.requestStop({ inputId: 'i-busy', requestKey: 'stop-1', reason: 'user asked' });
     const stopping = await h.call('session.get', { projectId: h.projectId, sessionId: 's-busy' });
@@ -806,6 +816,7 @@ describe('read-only query surface', () => {
       providerId: 'p-a',
       modelId: 'm-2',
       source: 'project',
+      sandbox: null,
     });
   });
 

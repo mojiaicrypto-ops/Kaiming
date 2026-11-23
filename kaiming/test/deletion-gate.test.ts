@@ -3,7 +3,8 @@
  * compound command. Pure text rules, so every case here is a direct call of `deletionCommandReason`.
  */
 import { describe, expect, it } from 'vitest';
-import { deletionCommandReason } from '../src/runtime/deletion-gate.ts';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { createDeletionGate, deletionCommandReason, historyCommandReason } from '../src/runtime/deletion-gate.ts';
 
 describe('deletion command detection', () => {
   it('asks before the direct deletion commands, in every common shape', () => {
@@ -190,5 +191,46 @@ describe('chief history/worktree gate', () => {
     // command is remote work and deliberately outside the local project fingerprint.
     expect(deletionCommandReason(`echo 'git commit -m done'`, { guardHistory: true })).toBeUndefined();
     expect(deletionCommandReason(`ssh host 'git commit -m done'`, { guardHistory: true })).toBeUndefined();
+  });
+});
+
+describe('read-only chief history refusal', () => {
+  it('identifies the commands the read-only sandbox refuses without a prompt', () => {
+    for (const command of [
+      'git commit -m done',
+      'git merge feature',
+      'git reset --hard HEAD~1',
+      'git checkout .',
+      'echo $(git push -f)',
+    ]) {
+      expect(historyCommandReason(command), command).toBeDefined();
+    }
+    for (const command of ['git status', 'git diff --stat', 'ls -la']) {
+      expect(historyCommandReason(command), command).toBeUndefined();
+    }
+  });
+});
+
+describe('read-only gate preference', () => {
+  it('refuses history commands without asking when the sandbox is active', async () => {
+    let handler:
+      | ((event: { toolName: string; input: unknown }, ctx: { hasUI: boolean }) => Promise<unknown>)
+      | undefined;
+    const pi = {
+      on: (name: string, callback: typeof handler) => {
+        if (name === 'tool_call') handler = callback;
+      },
+    } as unknown as ExtensionAPI;
+    createDeletionGate({ guardHistory: true, readOnlySandbox: true })(pi);
+    expect(handler).toBeDefined();
+    const refusal = await handler!(
+      { toolName: 'bash', input: { command: 'git commit -m done' } },
+      { hasUI: false },
+    );
+    expect(refusal).toMatchObject({ block: true });
+    expect(JSON.stringify(refusal)).toContain('settler');
+    expect(
+      await handler!({ toolName: 'bash', input: { command: 'git status' } }, { hasUI: false }),
+    ).toBeUndefined();
   });
 });

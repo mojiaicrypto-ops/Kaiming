@@ -353,6 +353,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           connection={session.status}
           activity={session.slot.busy}
           config={session.config}
+          sandbox={session.sandbox}
           context={session.slot.context}
           compacting={session.slot.compacting}
           onCompact={session.compact}

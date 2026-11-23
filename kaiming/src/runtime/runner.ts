@@ -12,10 +12,17 @@
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { type SessionEntry } from '@earendil-works/pi-coding-agent';
+import { createBashToolDefinition, createLocalBashOperations, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { OPEN_TASK_STATUSES, Store, StoreError, type InputRow, type TaskRow, type TaskStatus } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
 import { digestJson } from './hash.ts';
+import {
+  createRefusingBashOperations,
+  createSandboxedBashOperations,
+  sandboxEnvironment,
+  sandboxPolicyFor,
+  type SandboxRuntime,
+} from './os-sandbox.ts';
 import {
   assembleSystemPrompt,
   isPromptRoleId,
@@ -126,6 +133,8 @@ export interface RunnerOptions {
   readonly resolveConfig: (roleId: string, projectId?: string) => EffectiveConfig;
   /** The server's own storage (data dir, credential dir): paths the model's tools must not reach. */
   readonly privateDirs?: readonly string[];
+  /** OS sandbox runtime resolved at service start; absent only in unit tests that do not exercise it. */
+  readonly sandbox?: SandboxRuntime;
   /** Task type the session currently runs under; `undefined` while it has no Task yet. */
   readonly taskTypeOf?: (sessionId: string) => 'read' | 'write' | undefined;
   /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
@@ -747,6 +756,41 @@ export class InputRunner {
           taskType === 'read' || session.roleId === 'reviewer' || session.roleId === 'investigator',
         config,
       });
+      const sandbox = this.options.sandbox;
+      const sandboxPolicy = sandbox !== undefined && toolSet.allowlist.includes('bash')
+        ? sandboxPolicyFor(session.roleId, session.cwd, sandbox, sessionId)
+        : undefined;
+      let bashTool: ReturnType<typeof createBashToolDefinition> | undefined;
+      if (sandbox !== undefined && sandboxPolicy !== undefined) {
+        const common = {
+          exposeSessionEnvironment: false,
+          ...(sandbox.shellPath !== undefined ? { shellPath: sandbox.shellPath } : {}),
+        };
+        if (sandbox.mode === 'off') {
+          bashTool = createBashToolDefinition(session.cwd, {
+            ...common,
+            operations: createLocalBashOperations(
+              sandbox.shellPath !== undefined ? { shellPath: sandbox.shellPath } : {},
+            ),
+            spawnHook: (context) => ({
+              ...context,
+              env: sandboxEnvironment(context.env, sandboxPolicy),
+            }),
+          });
+        } else if (sandbox.status.active) {
+          bashTool = createBashToolDefinition(session.cwd, {
+            ...common,
+            operations: createSandboxedBashOperations(sandboxPolicy),
+          });
+        } else {
+          bashTool = createBashToolDefinition(session.cwd, {
+            ...common,
+            operations: createRefusingBashOperations(
+              sandbox.status.reason ?? 'the OS sandbox is not available',
+            ),
+          });
+        }
+      }
       const hostTools = [
         ...domainTools,
         ...asToolDefinitions(external),
@@ -754,6 +798,7 @@ export class InputRunner {
         // and the host tells it which interaction the request became.
         createQuestionTool(() => this.interactions.lastInteractionIdFor(sessionId)),
         ...(extras?.customTools ?? []),
+        ...(bashTool !== undefined ? [bashTool as never] : []),
       ];
       // Host-registered tools (domain tools, probe tools) join the allowlist so they stay usable, but a
       // name this role/task combination denies must not come back in through that union.
@@ -775,6 +820,7 @@ export class InputRunner {
           appendSystemPrompt: [
             assembleSystemPrompt(this.bodiesFor(config.promptDir), session.roleId).text,
           ],
+          ...(sandboxPolicy !== undefined ? { sandboxKey: digestJson(sandboxPolicy) } : {}),
           ...(binding !== undefined ? { piFile: binding.piFile } : {}),
           ...(extras?.customTools !== undefined ? { customTools: extras.customTools } : {}),
           // Always installed: the model's file tools stay inside the project (and never reach the
@@ -793,7 +839,12 @@ export class InputRunner {
               // The project row is the authority, not the cwd: a session that ever ran in a
               // subdirectory must still be bounded by the whole project.
               projectRoot: this.options.store.getProject(session.projectId)?.realPath ?? session.cwd,
-              privateDirs: this.options.privateDirs ?? [],
+              privateDirs: [
+                ...new Set([
+                  ...(this.options.privateDirs ?? []),
+                  ...(this.options.sandbox?.privatePaths ?? []),
+                ]),
+              ],
               // web_fetch saves the full page here and tells the model to grep it; reports and
               // screenshots live under the same root. Credentials and session files stay blocked.
               readableDirs: [join(config.agentDir, 'work')],
@@ -805,6 +856,9 @@ export class InputRunner {
               isTrusted: () => this.trustedSessions.has(sessionId),
               trust: () => this.trustedSessions.add(sessionId),
               guardHistory: session.roleId === 'chief',
+              ...(sandboxPolicy?.kind === 'read-only' && sandbox?.mode !== 'off'
+                ? { readOnlySandbox: true }
+                : {}),
             }),
             // The chief's shell is for observation/operations; after each call, report any tracked
             // project change (HEAD, status, dirty content) as an audit finding, not a rollback.
@@ -869,6 +923,15 @@ export class InputRunner {
           requestedTools: allowlist,
           activeTools: handle.session.getActiveToolNames(),
           taskType: taskType ?? null,
+          sandbox: sandbox !== undefined
+            ? {
+                mode: sandbox.mode,
+                kind: sandboxPolicy?.kind ?? null,
+                backend: sandbox.status.backend,
+                active: sandbox.status.active,
+                reason: sandbox.status.reason,
+              }
+            : null,
         },
       });
 

@@ -48,6 +48,19 @@ describe('private path guard', () => {
     expect(privatePathBlockReason({ ...base, toolName: 'ls', args: {} })).toBeUndefined();
   });
 
+  it('refuses an exact private file inside the project without hiding the project itself', () => {
+    const { project } = layout();
+    const workbenchEnv = join(project, '.env');
+    const businessEnv = join(project, 'business.env');
+    writeFileSync(workbenchEnv, 'KAIMING_ACCESS_PASSWORD=secret\n');
+    writeFileSync(businessEnv, 'BUSINESS=1\n');
+    const base = { cwd: project, privateDirs: [workbenchEnv] };
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: workbenchEnv } })).toMatch(
+      /private storage/,
+    );
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: businessEnv } })).toBeUndefined();
+  });
+
   it('allows the project itself', () => {
     const { project, data } = layout();
     const base = { cwd: project, privateDirs: [data] };

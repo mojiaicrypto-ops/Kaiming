@@ -32,6 +32,7 @@ import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
 import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
 import type { RunOutcome } from '../runtime/runner.ts';
+import { createSandboxRuntime, type SandboxMode } from '../runtime/os-sandbox.ts';
 import { isHiddenRawQuestionAnswerEvent } from '../runtime/raw-question.ts';
 import { isHiddenInternalTurnEvent } from '../runtime/model-output-guard.ts';
 import { resolveStoredConfig } from '../runtime/config.ts';
@@ -48,6 +49,10 @@ export interface StartOptions {
   readonly accessPassword: string;
   readonly port: number;
   readonly host?: string;
+  /** The loaded env file, when start.sh resolved one; used for the exact private-path shield. */
+  readonly envFile?: string;
+  /** Test/deployment override; defaults to KAIMING_SANDBOX (auto). */
+  readonly sandboxMode?: SandboxMode;
   readonly promptDir?: string;
   readonly staticDir?: string;
   readonly model?: { readonly providerId: string; readonly modelId: string };
@@ -70,7 +75,7 @@ export interface StartOptions {
   readonly log?: (line: string) => void;
 }
 
-export function startWorkbench(options: StartOptions): Promise<{
+export async function startWorkbench(options: StartOptions): Promise<{
   readonly origin: string;
   readonly port: number;
   close(): Promise<void>;
@@ -132,6 +137,19 @@ export function startWorkbench(options: StartOptions): Promise<{
     promptDir: options.promptDir ?? resolve(here, '../../../docs/technicalnew/prompts'),
     tools: [],
   };
+  const sandbox = await createSandboxRuntime({
+    dataDir: options.dataDir,
+    agentDir: server.agentDir,
+    ...(options.envFile !== undefined
+      ? { envFile: options.envFile }
+      : process.env['KAIMING_ENV_FILE'] !== undefined
+        ? { envFile: process.env['KAIMING_ENV_FILE'] }
+        : {}),
+    ...(options.sandboxMode !== undefined ? { mode: options.sandboxMode } : {}),
+  });
+  if (!sandbox.status.active) {
+    log(`sandbox: ${sandbox.status.mode}/${sandbox.status.backend}: ${sandbox.status.reason ?? 'inactive'}`);
+  }
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();
   /**
@@ -163,7 +181,12 @@ export function startWorkbench(options: StartOptions): Promise<{
     modelFacts: (selection) => factory.facts(selection),
     catalogModels: () => factory.catalog(),
   });
-  registerReadMethods(router, { store, blockedOf, attachmentDir: server.agentDir });
+  registerReadMethods(router, {
+    store,
+    blockedOf,
+    attachmentDir: server.agentDir,
+    sandbox: () => sandbox.status,
+  });
 
   // Live events (M4): the runner publishes what Pi reports, the write surface publishes invalidations.
   const hub = new SessionEventHub();
@@ -279,7 +302,8 @@ export function startWorkbench(options: StartOptions): Promise<{
     // reports is the one a claimed input actually runs with (R5).
     // Absolute, because the guard compares real paths: a relative data dir would otherwise be
     // resolved against each session's project and guard nothing.
-    privateDirs: [...new Set([resolve(options.dataDir), resolve(server.agentDir)])],
+    privateDirs: [...sandbox.privatePaths],
+    sandbox,
     resolveConfig: (roleId, projectId) =>
       resolveStoredConfig({
         roleId,
@@ -363,6 +387,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     hub,
     blockedOf,
     attachmentDir: server.agentDir,
+    sandbox: () => sandbox.status,
     epochOf: (sessionId) => epoch(sessionId),
     contextOf,
     compactingOf: (sessionId) => registry.get(sessionId)?.session.isCompacting ?? false,

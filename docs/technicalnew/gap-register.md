@@ -1,16 +1,16 @@
 # 下一轮开发计划与缺口登记
 
-日期：2026-11-18（整理自首轮真实项目开发周期复盘）。本页是**下一轮开发路线图（P0 → P1 → P2）**、活动风险与历史缺口归档的唯一入口；实现证据见 [验证记录](validation.md)，产品验收标准见 [产品验收](../productnew/acceptance.md)。
+日期：2026-11-18（2026-11-22 增补 P3 安全沙箱与多任务并行路线）。本页是**下一轮开发路线图（P0 → P1 → P2 → P3）**、活动风险与历史缺口归档的唯一入口；实现证据见 [验证记录](validation.md)，产品验收标准见 [产品验收](../productnew/acceptance.md)。
 
 维护规则：新增公开方法、删除界面入口、修正合同时同步本页；关闭一项时移入底部归档表并附提交或测试位置。
 
 ---
 
-## 一 下一轮开发计划 P0 → P1 → P2
+## 一 下一轮开发计划 P0 → P1 → P2 → P3
 
-基于第一个完整项目周期的实战复盘与第一性原理评估，现阶段核心架构（SQLite WAL + Pi 1.0 SDK + 五核心工具 + 独立 Review/Test 证伪 + Git/交付绑定）已经成型，不再引入新角色或新状态枚举。下一轮优先级按**“砍掉运行期隐性协调税 → 硬化脏工作区交付隔离 → 解锁高杠杆算力与会话分支”**排列。
+基于真实项目开发周期复盘、第一性原理分析与独立架构评审，现阶段核心架构（SQLite WAL + Pi 1.0 SDK + 五核心工具 + 独立 Review/Test 证伪 + Git/交付绑定）已经成型，不再引入新角色或新状态枚举。路线优先级按**“砍掉运行期隐性协调税（P0）→ 硬化脏工作区交付隔离（P1）→ 高杠杆算力与会话分支（P2）→ OS 级安全沙箱与按需 Worktree 多任务并行（P3）”**排列。
 
-以下 6 个工作包均按**独立开发 AI 可直接照单编码**的颗粒度编写，包含精确代码位置、函数/接口签名、边界条件、验证档（Verification Profile）与负向控制（Negative Control）要求。
+以下各工作包均按**独立开发 AI 可直接照单编码**的颗粒度编写，包含精确代码位置、函数/接口签名、边界条件、已排雷的禁用陷阱、验证档（Verification Profile）与负向控制（Negative Control）要求。
 
 ---
 
@@ -202,6 +202,196 @@
     1. 对已有真实 Pi JSONL 历史的空闲主管会话调用 `session.fork` → 返回新 `sessionId`，新会话通过 `session.messages.list` 读到与源会话相同的历史消息；随后在两边各发一条新消息，两边历史互不串扰；源会话若绑有未结束 Task，新会话 `currentTaskId === null`。
     2. **负向控制（Negative Control）**：对空会话（尚无历史）、非 chief 会话、或仍有 `processing`/`queued`/`interrupted` 输入的忙会话调用 `session.fork` → 必须被拒绝（`INVALID_ARGUMENT` 或 `WORKSPACE_BUSY`），且不产生孤儿 session 行或 JSONL 文件。
   - 浏览器路径（`browser/acceptance.spec.ts`）：在已有对话的会话行点击 Fork → 切换到带 `(fork)` 的新会话且历史可见。
+
+---
+
+### P3：执行安全沙箱、按需 Worktree 多任务并行与并发护栏（2026-11-22 评审确认，待实施）
+
+#### 架构共识与解耦原则（研发 AI 实施前必读）
+
+本节沉淀自第一性原理分析、独立架构评审以及对 **OpenAI Codex CLI（`codex-rs`）** 与 **Pi 生态沙箱方案**（本地 `node_modules/@earendil-works/pi-coding-agent/examples/extensions/sandbox/index.ts`、`gondolin/index.ts`、`anthropics/sandbox-runtime` ~7k ★、`earendil-works/gondolin` ~2.5k ★、`carderne/pi-sandbox` 312 ★）的调研，确立以下三条顶层原则：
+
+1. **三层彻底解耦（每层只管自己最擅长的事）**：
+   - **安全边界（`P3-1` OS 执行沙箱）归宿主内核层**：只管“不能读私有存储、不能越界写宿主机、不能越权碰 `.git`”，**绝不与 Worktree 或测试编排耦合**。
+   - **多任务目录隔离（`P3-2` 按需 Git Worktree）归宿主 Git 层**：只管同项目多主管会话并行推进多个 `write Task` 时的磁盘与 Git Index 正交、Plan/报告相对路径与诚实合流，**不内建跨语言依赖魔法或端口框架**。
+   - **测试环境隔离（换端口 + `$TMPDIR` vs. Docker）归 AI 自主决策**：测试形态因语言和项目千差万别——轻量服务由 AI 自选空闲端口 + `$TMPDIR` 临时数据目录；重依赖/多服务项目（Redis/Postgres/Nginx 等）由 AI 按需使用独立命名的 Docker 容器并在测完清理。宿主仅提供通用原则提示，不硬造万能测试容器编排层。
+2. **选型定论：零新增 npm 依赖，自研无状态 `os-sandbox.ts`**（参考 Codex + `sandbox-runtime`，**不直接引入 `@anthropic-ai/sandbox-runtime`**）：
+   - 原因：① `SandboxManager` 是进程级全局单例，设计面向单项目单 CLI 进程，无法承载开明“全局单 Server 同时并发多项目、多角色（Chief 只读 / Dev 写工作区 / Settler 写 `.git`）、多 Worktree”的并发模型；② 它强依赖宿主机外部二进制 `rg` / `socat` 与本地代理，会增加部署门槛并干扰 Chief 的 `ssh`/Docker 运维；③ 官方示例以 `bash -c wrappedCommand` 外层拼接启动，不如 Codex 直接 `spawn('sandbox-exec' | 'bwrap', ...)` + 参数化 `-D` 传入路径安全干净。
+   - 接入严格复用 Pi 1.0 SDK 原生 `createBashToolDefinition(cwd, { operations, exposeSessionEnvironment: false })`；未来如需为不可信仓库新增 `Gondolin` micro-VM 后端，可沿同一 `*Operations` 接缝平滑接入。
+3. **经独立 Review 排雷的明确禁区（严禁回退到这些脆弱设计）**：
+   - **严禁**在 SBPL / `bwrap` 中模拟 `.gitignore` 或把海量 `reviewed.paths` 逐条塞进沙箱参数（触发 `ARG_MAX`/mount 限制且无法表达取反规则与嵌套 ignore）；
+   - **严禁**对 Tester 在内核层把整个项目源码目录锁死只读（真实项目 `vitest`/`vite build`/`pytest`/`playwright` 需写 `dist/`、`coverage/`、`test-results/` 等，会被大面积误杀；Tester 防改源码仍靠 `deliveryState.digest` 不可伪造门禁兜底）；
+   - **严禁**给 `investigator`（以及 `read Task` / `paused` 恢复通道）开放所谓“只读沙箱 `bash`”（文件系统只读挡不住网络/SSH/DB 写操作，破坏 G1/S3 无副作用底线）；
+   - **严禁**靠正则匹配 stderr 里的 `EPERM` 弹提权窗（不可靠，采纳 `carderne/pi-sandbox` 做法：被拒透明返回真实错误）；
+   - **严禁**把 Worktree 建在 `.git/` 内（单仓库下 `createFileBoundaryGuard` 拦不住 `write`/`edit` 写穿主区或兄弟 Worktree；Monorepo 子目录项目下 `.git` 在 `project.realPath` 之外会导致全部文件工具被 100% 拒绝）；
+   - **严禁**自动软链 `node_modules` / `.venv` 到 Worktree（Node/Vite/Vitest `realpath` 解析会静默测到主工作区旧源码；Python `.venv` 硬编码主区绝对路径；且会触发 `tool-guard` 符号链接拦截）；
+   - **严禁**将 `.dev/backlog.md` 锚定主工作区跨目录双写而代码在 Worktree 提交（割裂 S6/D-07 提交历史，留下脏主区阻塞后续合流）；
+   - **严禁**在 `task(op=end)` 对已推进的主分支静默自动 rebase 合流（零 Git 文本冲突 ≠ 零语义冲突，直接击穿 D-08/G3“组合成果按最终组合重验证”不变量）；
+   - **严禁**承诺 macOS 下清理 `nohup`/`setsid` 脱离进程组的孤儿进程（macOS `sandbox-exec` 无 PID namespace，坚持 S5 诚实边界）。
+
+---
+
+#### P3-1：OS 级执行安全沙箱（`WP-Sandbox`，首选优先实施，不改 DB Schema）
+
+**状态**：已实施（2026-11-23）。产品基线与角色边界见 P-05/AC-63～AC-65；实现证据见 [验证记录](validation.md) 的 P3-1 条目与 `.dev/work/p3-1-os-sandbox-20261123/`。与 Worktree 及测试编排解耦。
+**实现证据**：macOS 真实内核探针与私密/越界/角色/git/linked-worktree/Unix-socket/nohup 边界 11/11；全量 71 文件 735 用例；webapp typecheck/build；浏览器 off/auto 徽标 2/2；`check:prompts` 15/15。Linux `bwrap` 路径因当前主机未安装未执行，保留 fail-closed。
+
+- **问题与根因**：
+  1. `src/runtime/tool-guard.ts` 仅拦截 Pi 的 6 个文件工具（`read/write/edit/ls/find/grep`），而 `bash` 工具目前仅靠文本级 `deletion-gate.ts` 与事后审计 `shell-audit.ts` 约束（[P-05](../productnew/modules/project-workspace.md#p-05-模型配置与首次使用) 已确认执行沙箱的目标契约，[G1](agents-and-tools.md#g1-角色与工具集合) 记录当前实现）。任何持 `bash` 的角色在脚本中直接读 `<agentDir>/models.json`、`auth.json`、`state.db` 或写项目外文件都无法被物理拦截；Chief 的 `shell-audit.ts` 也只能事后标红而不能事前阻止修改项目源码。
+  2. Pi 1.0 SDK 内建 `bash.js`（`exposeSessionEnvironment` 默认 `true`）会向每个 `bash` 子进程注入 `PI_SESSION_FILE`，直接暴露 `<agentDir>/sessions/...` 私有目录路径。
+  3. `src/runtime/registry.ts`（第 48～52 行）的 `bindingHash` 仅哈希 `{ config, tools, appendSystemPrompt }`，未包含 `spec.cwd` 与沙箱策略哈希；当会话工作目录或沙箱策略变化时会静默复用旧 Pi 实例。
+- **修改文件与精确实现步骤**：
+  1. **新增 `kaiming/src/runtime/os-sandbox.ts`（无状态 OS 沙箱引擎）**：
+     - **策略数据结构**（参考 Codex `WritableRoot { root, readOnlySubpaths }`，纯数据、无全局单例）：
+       ```ts
+       export type SandboxMode = 'auto' | 'strict' | 'off';
+       export type SandboxProfileKind = 'read-only' | 'workspace-write' | 'workspace-write-git';
+
+       export interface SandboxPolicy {
+         readonly kind: SandboxProfileKind;
+         readonly cwd: string;
+         /** 绝对禁读/禁写/禁列的私有路径：dataDir、agentDir，以及启动时实际加载的工作台 .env 精确文件。 */
+         readonly privatePaths: readonly string[];
+         /** 私有路径中唯一只读豁免区（<agentDir>/work，供 web_fetch/报告读取）。 */
+         readonly readablePrivatePaths: readonly string[];
+         /** 允许写入的目录根（按角色构造；read-only 不含项目目录）。 */
+         readonly writableRoots: readonly string[];
+         /** 在 writableRoots 内挖空为只读的子路径（如 .git 或 .git/hooks）。 */
+         readonly readOnlySubpaths: readonly string[];
+         /** 每会话独立 TMPDIR（如 /tmp/kaiming/<sessionId>）。 */
+         readonly tempDir: string;
+         /** auto 放行 Docker socket（运维与容器测试）；strict 为 false。 */
+         readonly allowDockerSocket: boolean;
+         /** auto/strict 都放行 $SSH_AUTH_SOCK 供 Chief 远程 ssh 运维。 */
+         readonly allowSshAgent: boolean;
+         /** auto/strict 默认 'allow'；这层不是网络出口控制，恶意代码隔离另走容器/VM。 */
+         readonly networkAccess: 'allow';
+       }
+       ```
+       `privatePaths` 的条目可以是目录或精确文件；`tool-guard` 与沙箱执行器都按 realpath 后的路径拒绝，精确文件用于工作台 `.env`。
+     - **硬隐私底线 + 角色自动映射（`sandboxPolicyFor(...)`，宿主固定、模型不可改）**：
+       - **硬隐私底线（所有持 `bash` 角色强制）**：内核层禁止读/写/列举 `privatePaths`（仅放行 `<agentDir>/work` 只读）；`privatePaths` 包含实际加载的工作台 `.env` 精确路径，即使项目根包含该文件也拒绝；用户自己项目的 `.env` 不加入，不误伤业务配置。子进程环境按 **allowlist** 清洗，只保留基础系统与常见工具链变量（`PATH`、`HOME`、`USER`、`SHELL`、`LANG`、`LC_*`、`TERM`、`XDG_*`、`SSH_AUTH_SOCK`、`DOCKER_HOST`、`HTTP(S)_PROXY`、`NO_PROXY` 等），清掉访问口令、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`BRAVE_API_KEY` 等所有 provider/宿主秘密；配合 `exposeSessionEnvironment: false` 消除 `PI_SESSION_FILE`；强制注入独立 `TMPDIR`/`TEMP`/`TMP` 与 `GIT_TERMINAL_PROMPT=0`。
+       - **Chief → `read-only`**：项目目录与 `.git` 100% 内核级只读；仅允许写 `tempDir`、`/dev/null`，以及（`auto` 模式下）运维 Unix Socket（`$SSH_AUTH_SOCK`、Docker socket `/var/run/docker.sock` / `~/.docker/run/docker.sock` 等）。`ssh`/`curl`/`docker`/`lsof`/`git status` 保持可用。**生效的只读沙箱下，主管的 commit、历史改写与工作区丢弃命令不再弹确认，直接以 `isError` 拒绝并指向 settler；只有 `off` 模式保留原确认。** `Trust all` 只免后续确认，不解锁内核只读。
+       - **Developer / Designer / Tester → `workspace-write`**：允许写 `cwd` + `tempDir` + 常见包管理器/工具缓存目录（`~/.npm`、`~/.cache`、`$XDG_CACHE_HOME`、`~/.pnpm-store` 等，支持环境变量追加）；**挖空 `<cwd>/.git`**（若为 linked worktree 则同时挖空其 `<git-common-dir>`）为只读，并自动注入 `GIT_OPTIONAL_LOCKS=0` 使 `git status` / `git diff` / `git log` 零报错正常运行。`auto` 放行 Docker socket 供 AI 自主选择 Docker 隔离测试；`strict` 关闭 Docker socket。设计角色移动/删除文档使用普通 `mv`/`rm`，不再依赖 `git mv`。
+       - **Settler → `workspace-write-git`**：同 `workspace-write`，但**放开 `.git`**（及 linked worktree 的 `<git-common-dir>`）以执行合法提交，仅挖空 **`<gitDir>/hooks`** 为只读（防止钩子注入）。
+       - **Reviewer / Investigator / `read Task` / `paused` hold**：维持无 `bash`（不改变 `tool-sets.ts` 只读不变量）。Tester 对源码的写不靠把项目锁成只读，仍由 `deliveryState.digest` 不可伪造门禁兜底。
+     - **跨平台内核执行器 `createSandboxedBashOperations(policy): BashOperations`**：
+      - **macOS（`darwin`）**：生成参数化 SBPL 策略文件并通过 `/usr/bin/sandbox-exec -f <profilePath> -D PRIVATE_DIR_0=... -D WRITABLE_ROOT_0=... ... -- <shell> -c <command>`（或通过 stdin 传命令，避免超长命令行与路径字符注入）直接 `spawn`，**不经过外层未沙箱化的 `bash -c` 拼接**；复用 Pi `bash.js` 同等的 `detached`、`killProcessTree`、`AbortSignal` 与 `timeout` 语义。目录用 `(subpath ...)`，精确文件用 `(literal ...)`；按 SBPL 后匹配优先，先 allow `writableRoots`、再 deny `privatePaths`、最后 allow read `<agentDir>/work`。必须用真实子进程验证顺序，并覆盖自举布局（`projectRoot=/repo`、dataDir 与 `.env` 在项目内）。
+      - **Linux（`linux`）**：直接 `spawn('bwrap', ...)`：`--ro-bind / /`、`--dev /dev --proc /proc`、对目录型 `privatePaths` 挂载 `--tmpfs <dir>` 物理遮空再 `--ro-bind <agentDir>/work <agentDir>/work` 挂回只读输出区、对 `writableRoots` 执行 `--bind`、对 `readOnlySubpaths` 执行 `--ro-bind` 挖空、`--die-with-parent`。**精确文件不能用 `--tmpfs`**：绑定一个 `chmod 000` 空占位文件 `--ro-bind <stub> <file>` 使读取直接 `EACCES`。挂载顺序必须先用 `--bind <cwd> <cwd>`，再覆盖 `privatePaths` 与只读 `.git`，后置覆盖生效；自举嵌套路径必须有真实用例。
+      - `privatePaths` 中的精确文件与符号链接逃逸必须在真实探针中验证：`..`、符号链接、精确 `.env` 路径都不得绕过；单文件私有路径在 Linux 与 macOS 分别走 stub/literal，不能假设同一规则。
+     - **环境开关与启动探针 `probeSandbox(mode)`**：
+       - 读取 `KAIMING_SANDBOX=auto|strict|off`（服务端启动环境变量，默认 `auto`）；重启工作台后对全部会话生效；首版不提供前端动态切换。
+       - 启动时在临时目录运行一次真实探针：尝试在沙箱内读临时私有文件 + 向沙箱外写测试文件，确认均被内核拒绝；注入未隔离执行器时探针必须失败。
+      - **`auto` 与 `strict` 缺失 `sandbox-exec`/`bwrap` 或探针失败时都 Fail-Closed 拒绝执行 `bash`**，返回原因并提示安装后端；**绝不降级为未沙箱执行**。只有显式 `off` 允许无沙箱执行并明确标「保护已关闭」。**服务实时状态**由启动探针结果直接从 `session.get` / `session.stream.prepare` 返回给当前工作/会话详情（重启后、未发消息的新会话立即可见）；`effectiveConfig.sandbox` 仅作为每次输入的历史审计快照，不得驱动实时徽标，避免重启后旧输入的 `active: true` 冒充当前状态。
+       - `auto` 与 `strict` 的唯一差异是 Docker socket：`auto` 放行，`strict` 禁止；两者都保留网络与 SSH agent，因此仍只是本机文件系统边界，不是恶意代码隔离；不可信第三方仓库使用外部容器/VM/独立用户。
+  2. **修改 `kaiming/src/runtime/tool-guard.ts` 与 `kaiming/src/server/main.ts`**：
+     - `privateDirs` 扩展为私有路径集合（目录或精确文件）；把启动时实际加载的工作台 `.env` 路径加入。项目自身的 `.env` 不加，保持可读。
+  3. **修改 `kaiming/src/runtime/runner.ts`**：
+     - 当 `toolSet.allowlist.includes('bash')` 且沙箱启用时，通过 Pi SDK 原生 `createBashToolDefinition(session.cwd, { operations: createSandboxedBashOperations(policy), exposeSessionEnvironment: false })` 构造 `bash` 工具加入 `customTools` 覆盖内建 `bash`（自动同步覆盖 `codemode` 嵌套调用，保留 `deletion-gate`、`shell-audit` 与默认 600s 超时守卫）；
+     - 即使 `KAIMING_SANDBOX=off`，仍默认设置 `exposeSessionEnvironment: false` 避免泄漏 `PI_SESSION_FILE`；
+     - 在 `recordEffectiveConfig` 中记录脱敏的 `sandbox: { mode, kind, backend, active, reason }`，只作为历史输入审计；服务实时状态由 `server/main.ts` 的启动探针结果经 `session.get` / `session.stream.prepare` 返回，不得只写日志或只读历史输入。
+  4. **修改 `kaiming/src/runtime/deletion-gate.ts`（第 195～228 行）**：
+     - `runner` 把当前沙箱政策传给主管门禁；`guardHistory` 命中 `HISTORY_RULES` 且只读沙箱生效时，不发起 interaction，直接返回 `isError` 与“主管只读沙箱不能提交/改写历史/丢弃工作区，请由 settler 收口”的原因；
+     - 该拒绝发生在 `Trust all` 判断之前，信任不能解锁内核只读；
+     - 仅 `KAIMING_SANDBOX=off` 保留原有的确认弹窗与 `Trust all` 语义。
+  5. **修改 `kaiming/src/runtime/registry.ts`（第 48～52 行）**：
+     - `SessionRegistry.acquire` 的 `bindingHash` 纳入 `cwd: spec.cwd` 与 `sandboxKey`（策略摘要），确保工作目录或沙箱档位变化时必重建 Pi 实例。
+  6. **安装与 `.env` 兼容（`scripts/setup.sh:51-63`、`scripts/start.sh`、`kaiming/package.json:11`、`kaiming/src/mcp/main.ts`）**：
+     - 新装默认把工作台 `.env` 放到默认私有数据目录（`kaiming/.kaiming-data/.env`），不写在项目根。
+     - 启动解析顺序：① 显式 `KAIMING_DATA_DIR` → `$KAIMING_DATA_DIR/.env`；② 否则默认私有数据目录的 `.env`；③ 回退老位置 `kaiming/.env`。`start.sh` 先解析路径再启动，避免读取 `.env` 才知道数据目录的循环。
+     - 显式 `--env-file <resolved>` 并传入 `KAIMING_ENV_FILE=<realpath>`；`server/main.ts` 把该 realpath 纳入 `privatePaths`。`kaiming/package.json` 的 `start` 不得硬编码 `.env`；直接 `npm start` 使用 `KAIMING_ENV_FILE` 或老文件回退；`kaiming/src/mcp/main.ts` 自启必须使用同一解析后的 data/env，不能以空口令/空库启动。
+     - 两条启动路径与 MCP 自启都要有测试证据；自举开发工作台自身时，`read`/`grep`/`bash` 都读不到工作台口令，而业务项目自己的 `.env` 不受影响。
+  7. **文档与提示词同步**：
+     - **现在（产品基线）**：`docs/productnew/modules/project-workspace.md`（P-05 新增「执行沙箱与角色边界」）、`docs/productnew/acceptance.md`（AC-63～AC-65）、`docs/productnew/modules/external-agents.md`（X-08 反向边界）与本页 P3-1 细则；不要让 README/安装指南提前宣称功能已落地。
+     - **P3-1 代码实现结算时**：同步 `README.md`/`README.en.md`、`docs/install.md`/`install.en.md`、`docs/technicalnew/agents-and-tools.md`（G1）、`docs/technicalnew/runtime-contract.md`（R1 `session.get`/`session.stream.prepare` 的实时 sandbox 字段）、`docs/technicalnew/ui-design.md`（StatusBar/方法消费表）；删除“没有 OS 沙箱/审计不是沙箱”的当前状态表述，改为已实现状态与诚实边界。
+     - `docs/technicalnew/prompts/chief.md`：说明只读沙箱会拒绝项目写、提交与历史改写，主管只做观察/运维，交付提交交 settler；`task(op=end)` 相关措辞同步。
+     - `docs/technicalnew/prompts/designer.md`（第 110 行）：文档移动/删除改用普通 `mv`/`rm`（无需写 `.git/index`，Settler 提交时 Git 自动识别重命名）。
+     - `docs/technicalnew/prompts/developer.md` & `prompts/tester.md`：补充通用、语言无关的隔离测试原则——轻量服务使用空闲临时端口 + `$TMPDIR` 独立数据目录；多服务/重依赖项目可使用独立命名的 Docker 容器并在测试结束后清理，严禁影响同机正在运行的服务或默认数据。
+     - 提示词按进程缓存，改完必须重启工作台才对新会话生效；不要在没有重启证据时声称提示词已生效。
+- **验证档与负向控制（`broad` — 涉及共享工具执行层与跨角色权限边界）**：
+  - 新增 `kaiming/test/os-sandbox.test.ts`（**真实内核子进程测试，禁止 Mock 替跑**）：
+    1. **隐私黑洞负向控制**：沙箱内分别用 `cat`、`node -e "fs.readFileSync(...)"`、符号链接跳转读取 `<privateDir>/models.json`、`state.db` 与工作台 `.env` → **全部必败**；读取 `<agentDir>/work/sample.txt` → **成功**；业务项目自身 `.env`（不是工作台加载的那份）→ **可读**；检查子进程 `env` 不含 `PI_SESSION_FILE`、访问口令与 provider key，`PATH`/`HOME`/`LANG`/`SSH_AUTH_SOCK` 等 allowlist 变量保留。
+    2. **Chief 只读负向控制**：`read-only` 沙箱内 `touch <cwd>/evil.ts`、`sed -i`、`git commit`、`git reset --hard` → **内核必拒**；执行 `git status`、`ls`、写 `$TMPDIR/ok.txt` → **成功**；`auto` 下 `ssh`/`docker ps`/`lsof` 可用，`strict` 下 `docker ps` 被拒。
+    3. **Developer/Designer/Tester 边界负向控制**：`workspace-write` 沙箱内写项目外宿主机路径、通过 `..`/符号链接越界、执行 `git commit`、写 `<cwd>/.git/hooks/pre-commit` → **内核必拒**；在 `<cwd>` 内写代码/测试产物、在 `$TMPDIR` 内新建临时 git 仓库并 commit、在 `<cwd>` 内跑 `git status`/`git diff` → **成功**；Tester 写 `dist`/`coverage` 成功。
+    4. **Settler 边界负向控制**：`workspace-write-git` 沙箱内执行 `git add` + `git commit` → **成功**；但写 `<cwd>/.git/hooks/pre-commit` 或写项目外路径 → **内核必拒**。
+    5. **探针与模式负向控制**：向 `probeSandbox` 注入未隔离的伪执行器 → 探针必须失败；删除后端或模拟探针失败时 `auto`/`strict` 均拒绝 `bash`；`off` 允许执行并显示保护关闭；`auto` 与 `strict` 的 Docker socket 差异有真实子进程证据。
+    6. **主管门禁负向控制**：只读沙箱下 `git commit`/`reset --hard` 直接 `isError`，**不出现 interaction**；`off` 下同样命令仍发起确认；`Trust all` 后再试写仍被沙箱拒绝。
+    7. **集成验证**：验证 `codemode` 嵌套调用 `bash` 同样受 OS 沙箱约束；验证 `registry.acquire` 在 `cwd` 或 `sandboxKey` 变化时重建实例；验证 `.env` 精确路径对 read/grep/bash 生效；运行 `npm --prefix kaiming run check:prompts` 通过；提示词重启后才生效的证据记录在结算。
+    8. **实时可见性与前端**：切换 `KAIMING_SANDBOX` 后重启，未发消息的 `session.get`/`session.stream.prepare` 立即返回当前 `{mode, backend, active, reason}`；旧输入 `effectiveConfig.sandbox` 不冒充当前；webapp `typecheck`/`test`、`npm --prefix kaiming run build` 与一条浏览器检查验证 off/auto 徽标。
+
+---
+
+#### P3-2：按需 Task 级 Git Worktree 隔离与诚实合流门禁（`WP-Worktree`）
+
+**状态**：待实施（建议在 `P3-1` 跑稳后切入；依赖 `P3-1` 对 `registry.ts` `cwd` 缓存键的修复，但运行时与沙箱完全解耦）。
+
+- **问题与根因**：
+  1. 数据库层（`idx_tasks_one_open_per_chief` 与 `claimBacklogItems`）已支持同项目多主管会话各自推进一项 Task，但当前所有 Task 及其成员全部共享 `project.realPath` 与同一个 `.git/index`。并发写 Task 时，一方的改动会污染另一方的 `scopeCheck`、`snapshotDelivery` 与提交门禁。
+  2. 现有代码存在多处隐含单工作树假设：`plan-store.ts:31` 与 `report-store.ts:38` 将 `planRef.path`/`bodyRef.path` 存为**绝对路径**（删除 Worktree 后历史报告永久 `REPORT_STALE`）；`completion-git.ts:23`、`task-tools.ts`、`delegation-tools.ts:139`、`read-methods.ts:537` 直接取 `chiefSession.cwd` 或 `project.realPath` 而非统一的 Task 工作目录；`rebindProject`（`store.ts:953`）会批量覆写所有会话 `cwd`。
+- **修改文件与精确实现步骤**：
+  1. **前置重构：路径权威统一与 ArtifactRef 相对化**：
+     - **`kaiming/src/runtime/plan-store.ts` & `report-store.ts`**：`storage: 'project'` 的 `planRef.path` / `bodyRef.path` 改为存**项目相对路径**（如 `.dev/work/<taskId>/plan.md`），同时向下兼容读取历史绝对路径；新增统一解析器，按“若 Task 存在活动 Worktree 且文件在 Worktree 中则读 Worktree，否则读主工作区 `project.realPath`”解析，确保 Worktree 回收后历史 Plan 与报告在主工作区永久可读。
+     - **单一 `resolveTaskCwd(store, task)`**：统一替换 `Store.requireTaskCwd`、`completion-git.ts:23`、`task-tools.ts`（`createOp`/`updateOp`/`getOp`/`endOp`）、`delegation-tools.ts:139`、`read-methods.ts:537` 中的目录来源。
+     - **`store.ts` `rebindProject`**：重新绑定项目目录时，不覆盖仍处于活动 Worktree 状态的会话 `cwd`。
+  2. **Schema 迁移 `v21 → v22`（`kaiming/src/store/store.ts`）**：
+     - `tasks` 表新增列：`workspacePath TEXT`、`branchName TEXT`、`baseCommit TEXT`、`workspaceState TEXT NOT NULL DEFAULT 'in_place'`（枚举：`in_place | active | merged | branch_kept | removed`）。旧行默认 `in_place`、其余列 `NULL`，100% 向下兼容。
+  3. **新增 `kaiming/src/runtime/worktree.ts`（按需创建、可选钩子、诚实合流与清理）**：
+     - **按需触发策略（拒绝一刀切）**：
+       - 同项目当前无其他未结束 `write Task` 且未显式指定 `isolatedWorkspace: true` → 默认 **`in_place` 原地模式**（保留 IDE 实时可见、零依赖复制成本与 P1-1 `dirtyBaseline`）；
+       - 同项目已存在其他未结束 `write Task`（真正多会话多任务并行），或 `task(op=create)` 显式传 `isolatedWorkspace: true`（且项目为可读 Git 仓库、存在有效 `HEAD`） → 自动创建独立 Worktree；非 Git 项目与 `read Task` 恒为 `in_place`。
+     - **存放位置与文件边界**：
+       - Worktree 建在仓库外部 **`<dataDir>/worktrees/<projectId>/<taskId>`**，分支名为 `kaiming/<taskId>`（从主工作区当前 `HEAD` 切出，记为 `baseCommit`），**绝不放在 `.git/` 内**；
+       - 该 Task 的成员与活动上下文将 `createFileBoundaryGuard` 的 `projectRoot` 收紧到 `task.workspacePath`（保证 Pi 原生 `write`/`edit` 同样无法写穿主工作区或兄弟 Worktree）。
+     - **依赖准备（禁止软链，简单可控）**：
+       - **严禁**软链 `node_modules` 或 `.venv`；
+       - 若项目根目录存在可选脚本 `.dev/worktree-setup.sh`，宿主在 Worktree 创建后自动执行一次（供项目按自身技术栈选择 APFS `cp -c`、`pnpm install --offline`、复制 `.env*` 等）；无该脚本则零额外动作。
+     - **`.dev/backlog.md` 一致性**：
+       - Worktree 内照常使用 `backlog` 工具读写该 Worktree 的 `.dev/backlog.md`，并由 Settler 随代码、规格、结算报告一起提交（保持 D-07/S6 完整提交不变量）。
+     - **诚实合流门禁（`task(op=end)`）**：
+       - 先在 Worktree 内核对 `deliveryCommitGaps` 全部已提交、且 `taskCompletionGaps` 无缺项；
+       - 在项目级合流锁下检查主工作区目标分支：
+         1. **主分支未移动（`main HEAD === task.baseCommit`）且主工作区干净且位于目标分支**：执行 `git merge --ff-only kaiming/<taskId>`（合入树与已 Review/Test 的树逐字节一致，零语义冲突风险）→ `store.endTask` 标记 `completed` + `workspaceState = 'merged'` → 执行 `git worktree remove` 回收目录并删除临时分支（跨存储顺序与重启对账明确记录在 `workspaceState` 中）；
+         2. **主分支已移动（`main HEAD !== task.baseCommit`）**：**拒绝自动 rebase**，返回 `COMPLETION_INCOMPLETE` 并指出主分支已前移，由主管安排 Settler/Developer 在 Worktree 内 rebase 最新主分支并按 D-08/G3 重新验证组合成果后再收口；
+         3. **主工作区存在用户未提交脏改动，或主工作区切在其他分支**：**绝不碰用户主工作区**；支持由主管显式传 `landingMode: 'branch'`（或默认安全回落）以 `workspaceState = 'branch_kept'` 收口，保留已提交分支 `kaiming/<taskId>` 供用户自行合并，并给出明确分支名与合并指令。
+     - **取消与显式回收**：
+       - `task(op=control, command='cancel')` 严格遵守 D-06 保留 Worktree 现场；
+       - 新增写 RPC `task.workspace.remove(projectId, taskId, expectedRevision)`：仅允许清理已终态（`completed` / `cancelled`）Task 的残留 Worktree（及可选已合入分支），更新 `workspaceState = 'removed'`；
+       - `scanStartup` 扫描 `workspaceState = 'active'` 但目录缺失或半创建的异常记录并上报。
+- **契约同步**：更新 `docs/technicalnew/storage-and-recovery.md`（S2 `v21 → v22`、S5/S6/S7）、`docs/technicalnew/agents-and-tools.md`（G2/G3）、`docs/technicalnew/runtime-contract.md`（R1 新增 `task.workspace.remove`）。
+- **验证档与负向控制（`broad` — 涉及 DB v22 迁移、交付路径解析与 Git 合流门禁）**：
+  - `test/worktree.test.ts` & `test/git-commit-gate.test.ts`：
+    1. **正向并行**：同项目两主管会话同时启动两个 `write Task` → 第 1 个 `in_place`、第 2 个自动创建外部 Worktree；两者互不污染 `scopeCheck` 与 `deliveryState`；主分支未动且干净时 `task(op=end)` 自动 `ff-only` 合入并回收目录，回收后 `task.get(includePlan: true)` 与 `task.report.get` 仍完整可读。
+    2. **负向控制 1（防未经复核的静默 rebase）**：Task A 先合入推进 `main` 后，Task B 调用 `task(op=end)` 必须返回 `COMPLETION_INCOMPLETE`（拒绝自动 rebase）。
+    3. **负向控制 2（保护脏主工作区）**：主工作区存在用户未提交脏文件时，Worktree Task 调用 `task(op=end)` 绝不覆盖或破坏主工作区文件；支持 `branch_kept` 安全收口。
+    4. **负向控制 3（文件边界隔离）**：Worktree 成员尝试用 `write`/`edit` 修改主工作区或兄弟 Worktree 路径，必须被 `createFileBoundaryGuard` 拒绝。
+    5. **负向控制 4（取消不删现场）**：`cancel` 后 Worktree 文件与报告保留；仅在终态调用 `task.workspace.remove` 才允许清理，运行中 Task 调 `task.workspace.remove` 必须拒绝。
+
+---
+
+#### P3-3：多任务并发护栏、Worktree 实时文件视图与看板感知（`WP-Parallel`）
+
+**状态**：待实施（在 `P3-2` 之后实施）。
+
+- **问题与根因**：
+  1. 架构文档 A4/S3 声明了“限制同时运行的专业 Session 数量”，但 `src/server/worker.ts`（第 67～74 行）与 `src/tools/delegation-tools.ts`（第 435～446 行）实际并无并发上限，且两条路径会并发拉起同一 `sessionId` 的 `runNext`。多任务并行时易瞬间拉爆本机 CPU/内存或触发模型网关 429 限流。
+  2. `src/server/read-methods.ts`（第 758～839 行）的 `project.files.list`/`read` 只读 `project.realPath`，不支持查看活动 Worktree 里的实时新增/修改文件；前端看板也尚未展示多任务各自的隔离分支与跨任务范围重叠提示。
+- **修改文件与精确实现步骤**：
+  1. **非阻塞专业 Session 并发配额（`kaiming/src/server/worker.ts`、`kaiming/src/runtime/runner.ts`、`kaiming/src/tools/delegation-tools.ts`）**：
+     - 新增配置项 `KAIMING_MAX_CONCURRENT_SPECIALISTS`（默认 `4`；Chief 会话与 `investigator(expectedKind='recovery')` 不占配额）；
+     - 消除 `delegation-tools.ts` 直接调 `runNext` 与 `worker.ts` 唤醒调 `runNext` 的双路径竞争（统一经单一调度口或按 `sessionId` 去重）；
+     - **关键时序**：在 `claimNextInput` **之前**执行非阻塞名额检查——无可用槽位时直接返回 `{ kind: 'throttled' }`，让该输入保持 `queued`（绝不先标 `processing` 挂起）；当任一运行中成员结束、或进入 `waiting_user` 等待用户交互时释放/让出名额并触发 `worker.notify()`，防止等待用户的成员把全局配额占死导致死锁。
+  2. **跨任务范围重叠雷达（`kaiming/src/tools/delegation-tools.ts` & `task-tools.ts`）**：
+     - 在 `task(op=create / update / dispatch)` 时，除现有同步骤成员 `overlapWarnings` 外，额外比对同项目其他活动 `write Task` 的 Plan 声明范围与 `changedProjectPaths(otherTaskCwd)`，存在交集时返回 `crossTaskOverlapWarning`（列出冲突 `taskId`、主管会话标题与路径），不拦截，由主管与用户提前知情。
+  3. **Worktree 实时文件读取与前端看板感知**：
+     - **`kaiming/src/server/read-methods.ts`**：`project.files.list` / `project.files.read` 增加可选 `taskId` 参数（校验该 Task 属于当前 `projectId`），传入时读取 `resolveTaskCwd(store, task)` 下的实时文件，使 `FileViewer` 与 MCP 在任务进行中即可查看 Worktree 改动。
+     - **约定环境变量**：为活动 Worktree 会话在 `bash` 环境中注入 `KAIMING_TASK_ID` 与 `KAIMING_WORKSPACE_SLOT`（小整数槽位，供项目按需选用，不作为通用端口隔离承诺）。
+     - **前端（`kaiming/webapp/src/chat/SessionsList.tsx` & `/project` 看板）**：进行中 Task 卡片显示所属隔离分支/Worktree 状态（`in_place` / `⎇ kaiming/t-xxx` / `branch_kept`）、跨任务范围重叠提示、以及“清理残留 Worktree”操作入口（终态且未清理时）和主管会话跳转；点击进行中 Task 报告里的代码链接时 `FileViewer` 透传 `taskId`。
+- **契约同步**：更新 `docs/technicalnew/runtime-contract.md`（R1 `project.files.*` 可选 `taskId`）、`docs/technicalnew/storage-and-recovery.md`（S3 并发配额与 `waiting_user` 让槽语义）、`docs/technicalnew/ui-design.md`（U9 方法消费表）；注意外部 MCP 接入保持 [X-02](../productnew/modules/external-agents.md#x-02-每个项目一条固定会话) 单固定会话语义不变。
+- **验证档与负向控制（`focused`）**：
+  - `test/parallel-quota.test.ts` & `test/server-read.test.ts`：
+    1. **配额负向控制**：设置 `KAIMING_MAX_CONCURRENT_SPECIALISTS = 2` 同时派发 4 个专业成员 → 任意时刻 `processing` 严格 ≤ 2，其余保持 `queued`（绝不提前变 `processing`），且前 2 个完成后自动唤醒后 2 个全部完成。
+    2. **防死锁负向控制**：前 2 个成员全部进入 `waiting_user` 时，第 3 个成员或 `recovery` 调查仍可被正常认领执行，不发生死锁。
+    3. **跨任务重叠与越权读负向控制**：两并行 Task 修改同一文件路径时返回 `crossTaskOverlapWarning`；`project.files.read` 传入其他项目的 `taskId` 必须返回 `NOT_FOUND`。
 
 ---
 

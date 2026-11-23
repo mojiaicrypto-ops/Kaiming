@@ -20,6 +20,12 @@ export interface ContextView {
   /** False when only the window is known (no Pi instance in this process). */
   live: boolean;
 }
+export interface SandboxStatusView {
+  mode: 'auto' | 'strict' | 'off';
+  backend: 'sandbox-exec' | 'bwrap' | 'none';
+  active: boolean;
+  reason: string | null;
+}
 
 export interface PreparedSnapshot {
   sessionId: string;
@@ -28,6 +34,8 @@ export interface PreparedSnapshot {
   activity: SessionActivity;
   /** What the running input was configured with; null while nothing is running. */
   config?: { providerId: string; modelId: string; source: string } | null;
+  /** Live service sandbox state, present even for an idle session with no input. */
+  sandbox?: SandboxStatusView | null;
   /** Context occupancy at this boundary; null when the model declares no window. */
   context?: ContextView | null;
   /** Pi is summarizing this session right now (manual or automatic compaction). */

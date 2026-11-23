@@ -9,6 +9,32 @@ export interface RecordedConfig {
   readonly providerId: string;
   readonly modelId: string;
   readonly source: string;
+  readonly sandbox: RecordedSandbox | null;
+}
+
+/** The sandbox facts an input ran with; history only, never the live badge. */
+export interface RecordedSandbox {
+  readonly mode: string;
+  readonly kind: string | null;
+  readonly backend: string;
+  readonly active: boolean;
+  readonly reason: string | null;
+}
+
+function sandboxOf(value: unknown): RecordedSandbox | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const mode = record['mode'];
+  const backend = record['backend'];
+  const active = record['active'];
+  if (typeof mode !== 'string' || typeof backend !== 'string' || typeof active !== 'boolean') return null;
+  return {
+    mode,
+    kind: typeof record['kind'] === 'string' ? record['kind'] : null,
+    backend,
+    active,
+    reason: typeof record['reason'] === 'string' ? record['reason'] : null,
+  };
 }
 
 export function summarizeRecordedConfig(recorded: string | null): RecordedConfig | null {
@@ -25,9 +51,13 @@ export function summarizeRecordedConfig(recorded: string | null): RecordedConfig
   const modelId = record['modelId'];
   if (typeof providerId !== 'string' || typeof modelId !== 'string') return null;
   const source = record['source'];
-  return { providerId, modelId, source: typeof source === 'string' ? source : 'unknown' };
+  return {
+    providerId,
+    modelId,
+    source: typeof source === 'string' ? source : 'unknown',
+    sandbox: sandboxOf(record['sandbox']),
+  };
 }
-
 /** The newest recorded configuration in a session, preferring the input that is running now. */
 export function recordedConfigOf(
   inputs: readonly { readonly status: string; readonly effectiveConfig: string | null }[],

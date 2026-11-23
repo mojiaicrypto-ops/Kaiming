@@ -74,6 +74,9 @@
 | AC-60 | 分别建主设计、实施、正式文档、只读调查四种 Task；设计 Task 尝试进入开发/测试；实施 Task 在 requiresTest=false 时尝试测试；实施中依据不足回到 design | 每种 Task 只接受自己的完成链；设计/文档/调查拒绝测试；实施只在 requiresTest=true 时接受测试；实施回到 design 是合法的补充设计且返工计数增加；设计 Task 不出现开发/测试 | D-01、D-04、G2 |
 | AC-61 | 设计 Review 通过后修改一份规格；另一次只关闭原待办、不碰规格 | 修改规格后 Task 不能完成，要求重新 Review；只关闭待办不会让 Review 失效；设计完成核对同时要求原待办已关闭、切片有规格引用 | D-04、D-09、G3 |
 | AC-62 | 归档一个已结束会话；再尝试归档一个仍有排队输入的会话；最后恢复归档会话 | 已结束会话从左侧主列表收起，归档区可见且历史/ Task 保留；恢复后回到主列表；忙会话被拒绝并列出原因；当前会话不提供归档；归档不是删除 | C-02 |
+| AC-63 | 在有沙箱后端的机器上，用 read/grep 与 bash 的 `cat`、`node`、符号链接读取工作台数据目录的 `models.json`、`state.db`；再用 `..` 与符号链接写项目外路径 | 私有数据全部被拒；`agentDir/work` 可读；子进程 `env` 不含访问口令、`PI_SESSION_FILE`、provider key，`PATH`/`HOME` 等工具链变量保留；工作台自身 `.env` 即使位于被接入项目也读不到；项目自身 `.env` 不误伤 | P-05 |
+| AC-64 | 主管执行 `touch`/`sed -i`/`git commit`；设计、开发、测试执行 `git commit` 与写 `.git/hooks`；结算执行 `git add`/`commit`；测试写 `dist`/`coverage`；再选择 `Trust all commands in this session` 后重复一次写尝试 | 主管项目写被拒，`git status`、`ssh`、`docker`、`lsof`、日志可用；设计/开发/测试可写项目文件，但 commit 与 hooks 被拒；结算提交成功、hooks 写被拒；测试构建产物可写；拒绝是真实错误并说明原因，不弹提权窗；`Trust all` 后写仍被拒 | P-05、G1 |
+| AC-65 | 分别以 `auto`、`strict`、`off` 启动；在缺少后端或探针失败的机器上运行 `auto` 与 `strict`；在 `auto` 运行 `docker ps` 与 `ssh` 到已配置主机，在 `strict` 再运行 `docker ps`；重启后查看当前工作/会话详情 | `auto`/`strict` 无后端或探针失败都拒绝 `bash` 并显示原因，不裸奔；只有 `off` 允许无沙箱执行并显示「保护已关闭」；`auto` 允许 Docker socket，`strict` 拒绝，两者网络与 SSH 可用；模式在服务端启动时读取、重启后对全部会话生效，首版无前端动态切换；不可信仓库提示使用容器/VM | P-05 |
 
 ## 整体交付检查
 
