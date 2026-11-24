@@ -312,6 +312,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onOpenRail={() => setRailOpen((open) => !open)}
             railOpen={railOpen}
             onOpenFile={openFile}
+            onOpenSettings={() => go('/settings/models')}
           />
         )}
         {route.view === 'project' && (

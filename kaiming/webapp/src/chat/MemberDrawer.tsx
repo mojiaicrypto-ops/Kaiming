@@ -8,6 +8,7 @@ import { State } from '../app/State';
 import { useI18n } from '../i18n/I18nProvider';
 import { createAutoscroll } from '../lib/scroll';
 import { Elapsed } from './Elapsed';
+import { InputErrorNotice } from './InputErrorNotice';
 import type { TaskMember } from '../state/slot';
 
 export interface MemberDrawerProps {
@@ -92,6 +93,7 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, phaseLabel, exp
       footer={<span className="f3">{t('chat.member.onlyRead')}</span>}
     >
       <div ref={bodyRef} className="scroll drawer-tx" style={{ height: '100%' }} onLoadCapture={settle}>
+        <InputErrorNotice error={slot.inputError} />
         {slot.items.length === 0 ? (
           <span className="f3">{status === 'connected' ? t('chat.member.none') : t('common.loading')}</span>
         ) : (

@@ -441,6 +441,24 @@ describe('input runner', () => {
     expect(h.store.getInput('i-1')?.checkpoint).not.toBeNull();
   }, 60_000);
 
+  it('classifies a monthly quota exhaustion instead of storing a generic model error', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'http_error',
+          status: 429,
+          message: 'Kiro: usage limit reached: You have reached the limit. (MONTHLY_REQUEST_COUNT)',
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('failed');
+    expect(h.store.getInput('i-1')).toMatchObject({ status: 'failed', errorCode: 'MODEL_QUOTA_EXHAUSTED' });
+    expect(h.store.getInput('i-1')?.errorMessage).toContain('MONTHLY_REQUEST_COUNT');
+  }, 60_000);
+
   it('classifies a host-aborted run as stopped', async () => {
     let noteAbort: (() => void) | undefined;
     const h = await harness({

@@ -8,6 +8,7 @@ import { tailHistory, readPiHistory, type HistoryRecord } from './history.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
+import { classifyModelFailure, publicFailureDetail } from '../runtime/model-error.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 import type { SandboxStatus } from '../runtime/os-sandbox.ts';
 import { partsOfPayload } from '../runtime/input-text.ts';
@@ -122,6 +123,10 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           // A blocked run is state, not an event: a reader who connects after it happened still
           // has to see why nothing is running.
           blocked: options.blockedOf?.(sessionId) ?? null,
+          // The newest terminal failure, so a reload keeps the reason the run died instead of
+          // showing an apparently empty conversation. A later input clears it; old MODEL_ERROR
+          // rows are classified for display without a data migration.
+          lastInputError: lastInputErrorOf(inputs),
           // Pending interactions are part of the boundary copy (M5): a reconnecting page sees the
           // open questions again instead of losing them.
           interactions: (session.roleId === 'chief'
@@ -163,6 +168,33 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
       };
     },
   });
+}
+
+/** The latest input's failure, or null when the latest input did not fail. */
+function lastInputErrorOf(
+  inputs: readonly {
+    readonly inputId: string;
+    readonly status: string;
+    readonly errorCode: string | null;
+    readonly errorMessage?: string | null;
+  }[],
+): { inputId: string; status: string; code: string; message: string } | null {
+  const latest = inputs[inputs.length - 1];
+  if (
+    latest === undefined ||
+    latest.errorCode === null ||
+    (latest.status !== 'failed' && latest.status !== 'interrupted')
+  ) {
+    return null;
+  }
+  return {
+    inputId: latest.inputId,
+    status: latest.status,
+    code: latest.errorCode === 'MODEL_ERROR'
+      ? classifyModelFailure(latest.errorMessage)
+      : latest.errorCode,
+    message: publicFailureDetail(latest.errorMessage),
+  };
 }
 
 function activityOf(inputs: readonly { readonly status: string; readonly stopRequestKey?: string | null }[]): string {

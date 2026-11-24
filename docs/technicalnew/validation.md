@@ -4,15 +4,15 @@
 
 ---
 
-## 一、当前验证基线总览（截至 2026-11-14）
+## 一、当前验证基线总览（截至 2026-11-24）
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **71 文件 / 735 用例通过**（SQLite WAL 接纳/认领/迁移至 v19、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界等，含负向控制与变异自检） |
-| **前端单元** | `npm --prefix kaiming/webapp test` | **20 文件 / 140 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、错误码映射等） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **72 文件 / 742 用例通过**（SQLite WAL 接纳/认领/迁移至 v19、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
+| **前端单元** | `npm --prefix kaiming/webapp test` | **21 文件 / 146 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、输入失败横幅与终态等待、根错误边界等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
-| **浏览器 E2E** | `npm --prefix kaiming run test:browser` | **Playwright 真实 Chromium + 真 Server 套件通过**（三屏导航、流式对话、提问答复、双击防重、断线恢复、项目看板、文件/报告画布、模型分层与思考等级、用量统计、会话归档、320/390px 窄屏无溢出等） |
+| **浏览器 E2E** | `npm --prefix kaiming run test:browser` | **Playwright 真实 Chromium + 真 Server 套件通过**（三屏导航、流式对话、提问答复、双击防重、断线恢复、项目看板、文件/报告画布、模型分层与思考等级、模型额度失败横幅与刷新保留、用量统计、会话归档、320/390px 窄屏无溢出等） |
 | **真实模型探针** | `npm --prefix kaiming run check:{model,runtime,tools,backlog,workflow}` | `check:model` 4/4、`check:runtime` 4/4、`check:tools` 4/4、`check:backlog` 4/4、`check:workflow` 8/8（真实主管完成 `create → develop → review → test → settlement → end` 闭环） |
 
 ---
@@ -196,3 +196,10 @@
 - **实现**：新增 `os-sandbox.ts`（策略、真实探针、macOS SBPL、Linux bwrap、精确文件 stub、env allowlist）；`runner` 以原生 `createBashToolDefinition` 覆盖内建 bash，覆盖 `codemode` 嵌套调用；`deletion-gate` 增加 `historyCommandReason` 与 `readOnlySandbox`；`registry` 绑定 `cwd`/`sandboxKey`；`server/main` 在启动时构建运行时，`session.get`/`stream.prepare` 返回实时 `sandbox`，历史 `effectiveConfig.sandbox` 仅审计；`StatusBar` 显示实时徽标；`setup.sh`/`start.sh`/`package.json` 处理新数据目录 `.env` 与旧位置兼容；README/install/G1/runtime-contract/ui-design 与 chief/designer/developer/tester 提示词同步。
 - **证据**：`test/os-sandbox.test.ts` 11/11（真实内核：私密读、精确 `.env` 读写、项目外写、自举嵌套、developer `.git` 只读、settler commit/hooks、linked worktree settler commit、私密 Unix socket、nohup 后台完成、env allowlist、缺后端 fail-closed、伪 executor 探针）；`tool-guard` 15/15、`deletion-gate` 13/13、`runtime` 63/63、`server-read` 26/26、`server-stream` 13/13、`codemode-runtime` 4/4、`registry` 1/1、`workbench-entry` 6/6；全量 71 文件 735/735；`tsc`、webapp typecheck、`npm --prefix kaiming run build`；浏览器 `browser/sandbox-status.spec.ts` 2/2（off/auto 徽标）；`check:prompts` 15/15。独立 Review 首轮 NEEDS_FIX 的 6 项、linked-worktree settler 项均修复并复审 PASS；独立 Test 结果见 `.dev/work/p3-1-os-sandbox-20261123/{review,test}.md`。
 - **边界**：Linux `bwrap` 本机未安装，代码路径（精确文件 stub、挂载顺序、strict Docker）未在本机执行，探针会 fail-closed；网络、SSH、Docker（auto）、项目 `.env`、home 其他密钥和远端副作用不在边界内；macOS 不清理 `nohup`/`setsid` 孤儿进程；模式是服务端启动变量，无前端动态切换；提示词缓存需重启。它不是恶意代码隔离，不可信仓库使用容器/VM/独立用户。
+
+### 2026-11-24 · 模型失败可见性与恢复
+
+- **问题**：prepdex 的真实主管会话已持久化多条 `MODEL_ERROR`（Kiro `429 ... MONTHLY_REQUEST_COUNT`），但浏览器只显示用户消息；空内容的 assistant error 消息被转录过滤，`lastInputError` 不存在，失败输入又被提醒系统当成“对话已完成”。用户看到的是没有原因的空屏。
+- **实现**：新增纯分类器 `runtime/model-error.ts`，把额度/限流/凭证/上下文/未知错误映射为 `MODEL_QUOTA_EXHAUSTED`、`MODEL_RATE_LIMITED`、`MODEL_AUTH_FAILED`、`MODEL_CONTEXT_EXCEEDED`、`MODEL_ERROR`，服务商原文保留；`runner` 存真实分类；`session.stream.prepare` 返回最新 failed 输入的 `lastInputError`（未关闭的成员 interrupted 也可显示；主管 watchdog 中断先被宿主记为 stopped，仍走恢复路径；旧 `MODEL_ERROR` 在读取时分类，无需迁移）；Pi `message_end` 错误与运行终态发布顶层 `input` SSE 帧；快照与真实帧分别覆盖刷新与实时。前端 `slot` 持有错误并忽略旧输入迟到帧，`agent_end` 后等待终态帧再允许完成提醒，`InputErrorNotice` 显示双语分类句、服务商原文和模型设置入口；根 `ErrorBoundary` 把渲染异常变成可读错误页和重新加载。
+- **证据**：`test/model-error.test.ts` 5/5（真实 Kiro 月额度样本必须归额度；`429 Rate limit reached ...` 必须归限流；401/上下文/未知 negative control；详情截断）；`runtime` 月额度真实 stub 用例通过；`server-stream` 快照持久化/清除旧分类通过；webapp focused 43/43（`slot` 终态等待、提醒、边界 markup）；全量 72 文件 742/742、前端 21/146、两套 typecheck、构建、`check:prompts` 15/15；浏览器 `browser/model-error.spec.ts` 1/1（额度横幅、无完成提醒、刷新仍可见、设置入口）；既有完成提醒用例 1/1。全量浏览器为 74/76；失败是既有 acceptance 的 task-create 用例缺少 `verificationProfile` 与状态栏宽度注入用例，均不作为本次通过证据。真实 prepdex 数据用于问题定位；未用其真实凭证重放。
+- **边界**：不自动重试、不换模型、不把 provider 失败改成成功；provider 自身的重试可能让错误横幅晚于首次 429 出现；分类只基于 provider 文本，未知仍保留原文。`ErrorBoundary` 只覆盖 React 渲染异常，事件处理器/网络错误走各自 banner/toast；本次未做全站故障注入。

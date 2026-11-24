@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import type { ConnectionStatus } from '../state/useSession';
 import { useI18n } from '../i18n/I18nProvider';
+import { InputErrorNotice } from './InputErrorNotice';
+import type { InputErrorView } from '../api/stream';
 import { catalogErrorKey } from './task-labels';
 import { State } from '../app/State';
 
@@ -10,6 +12,9 @@ export interface BannerProps {
   readonly onAskChief: (text: string) => void;
   readonly onDismissInterrupted: () => void;
   readonly status: ConnectionStatus;
+  /** The latest failed input: visible until the next input replaces it. */
+  readonly inputError: InputErrorView | null;
+  readonly onOpenSettings?: (() => void) | undefined;
   readonly blocked: { readonly code: string; readonly detail: string } | null;
   readonly onDismissBlocked: () => void;
   readonly onRetry: () => void;
@@ -30,6 +35,8 @@ export function Banner({
   status,
   blocked,
   onDismissBlocked,
+  inputError,
+  onOpenSettings,
   onRetry,
   onNewSession,
   historyProblems,
@@ -88,6 +95,10 @@ export function Banner({
         </button>
       </div>,
     );
+  }
+
+  if (inputError !== null) {
+    items.push(<InputErrorNotice key="input-error" error={inputError} onOpenSettings={onOpenSettings} />);
   }
 
   if (blocked !== null) {

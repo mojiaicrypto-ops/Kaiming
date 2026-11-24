@@ -11,7 +11,7 @@
  * delta accumulation) passes through state/normalize.ts exactly once at the boundary below —
  * the reducer's internals and the renderer only ever see normalized blocks.
  */
-import type { ContextView, PreparedSnapshot, SessionActivity, PendingInteraction, StreamFrame } from '../api/stream';
+import type { ContextView, InputErrorView, PreparedSnapshot, SessionActivity, PendingInteraction, StreamFrame } from '../api/stream';
 import { normalizeMessage, normalizePiMessage } from './normalize';
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'toolResult';
@@ -125,6 +125,16 @@ export interface SessionSlot {
   context: ContextView | null;
   /** Pi's summary call is running; the manual action is disabled until it settles. */
   compacting: boolean;
+  /** The latest terminal model/turn failure; a later submitted or settled input clears it. */
+  inputError: InputErrorView | null;
+  /**
+   * The input whose Pi turn ended but whose terminal input frame has not arrived. The completion
+   * reminder waits for that frame, so a failure classified by the host after `agent_end` cannot be
+   * announced as "Conversation finished".
+   */
+  settlingInputId: string | null;
+  /** The latest terminal outcome, set only by an `input` frame so a stop cannot look complete. */
+  terminalStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
   /**
    * A message this tab submitted that has not reached the history yet. Pi writes the user turn only
    * when the run starts, so between "accepted" and "delivered" neither the stream nor a reload
@@ -139,6 +149,9 @@ export const emptySlot = (): SessionSlot => ({
   busy: 'idle',
   hasEarlier: false,
   currentInputId: null,
+  inputError: null,
+  settlingInputId: null,
+  terminalStatus: null,
   pending: [],
   liveKeys: new Set<string>(),
   taskDetail: null,
@@ -379,6 +392,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             imageCount: input.imageCount ?? 0,
             documentCount: input.documentCount ?? 0,
           })),
+        inputError: snapshot.lastInputError ?? null,
+        settlingInputId: null,
+        terminalStatus: null,
         // The boundary copy is authoritative on connect: a missed notice cannot leave a stale meter.
         context: snapshot.context ?? null,
         compacting: snapshot.compacting === true,
@@ -411,6 +427,12 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         queuedInputs: state.queuedInputs.filter((entry) => entry.inputId !== action.inputId),
         currentInputId: state.currentInputId === action.inputId ? null : state.currentInputId,
         pendingEcho: state.pendingEcho?.inputId === action.inputId ? null : state.pendingEcho,
+        inputError:
+          state.inputError?.inputId === action.inputId ? null : state.inputError,
+        settlingInputId:
+          state.settlingInputId === action.inputId ? null : state.settlingInputId,
+        terminalStatus:
+          state.currentInputId === action.inputId ? null : state.terminalStatus,
       };
     case 'inputAccepted':
       // The submit receipt: adopt the input before any Pi event arrives, but do not retarget STOP
@@ -422,6 +444,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         currentInputId: running ? state.currentInputId : action.inputId,
         busy: state.busy === 'idle' ? 'queued' : state.busy,
         pendingEcho: action.content === undefined ? state.pendingEcho : { inputId: action.inputId, content: action.content },
+        inputError: null,
+        settlingInputId: null,
+        terminalStatus: null,
       };
     case 'busy':
       return state.busy === action.activity ? state : { ...state, busy: action.activity };
@@ -438,6 +463,27 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       // snapshots even while a run streams several responses.
       if (frame.type === 'context') {
         return frame.context === undefined ? state : { ...state, context: frame.context };
+      }
+      if (frame.type === 'input') {
+        const inputId = frame.inputId;
+        if (inputId === undefined) return state;
+        // A late frame for an older turn must not replace the error of the input now on screen.
+        if (state.currentInputId !== null && state.currentInputId !== inputId) return state;
+        if (frame.status === 'failed' || frame.status === 'interrupted') {
+          if (frame.error === undefined) return state;
+          return {
+            ...state,
+            inputError: {
+              inputId,
+              code: frame.error.code,
+              message: frame.error.message,
+              status: frame.status,
+            },
+            settlingInputId: null,
+            terminalStatus: frame.status,
+          };
+        }
+        return { ...state, inputError: null, settlingInputId: null, terminalStatus: frame.status ?? null };
       }
       if (frame.type !== 'pi' || frame.event === undefined) {
         return state;
@@ -587,6 +633,8 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             ...state,
             busy: state.queuedInputs.length > 0 ? 'queued' : 'idle',
             currentInputId: state.queuedInputs.length > 0 ? null : state.currentInputId,
+            settlingInputId:
+              state.queuedInputs.length > 0 ? null : state.currentInputId,
             compacting: false,
           };
         case 'turn_start':
@@ -598,6 +646,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             busy: 'processing',
             pendingEcho: null,
             currentInputId: frame.inputId ?? state.currentInputId,
+            inputError: null,
+            settlingInputId: null,
+            terminalStatus: null,
             queuedInputs: frame.inputId === undefined
               ? state.queuedInputs
               : state.queuedInputs.filter((entry) => entry.inputId !== frame.inputId),

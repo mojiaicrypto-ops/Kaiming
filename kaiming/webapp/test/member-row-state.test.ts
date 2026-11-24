@@ -46,7 +46,7 @@ describe('a member row', () => {
 });
 
 describe('the failed member reason resolves the terminal error code for the user', () => {
-  const t = (key: 'error.blocked_config' | 'task.state.failed'): string =>
+  const t = (key: string): string =>
     ({
       'error.REPORT_RETRY_EXHAUSTED': '报告连续失败，重试预算已用尽，运行已终止',
       'error.blocked_config': '没有可用模型',

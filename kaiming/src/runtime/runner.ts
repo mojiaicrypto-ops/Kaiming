@@ -57,6 +57,7 @@ import { createBrowserTool } from '../tools/browser-tool.ts';
 import { createWebFetchTool } from '../tools/web-fetch.ts';
 import { createInspectTool } from '../tools/inspect-tool.ts';
 import { createWebSearchTool } from '../tools/web-search.ts';
+import { classifyModelFailure } from './model-error.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import { createBacklogTool, type BacklogToolContext } from '../tools/backlog-tools.ts';
 import { createProjectTool, type ProjectToolContext } from '../tools/project-tools.ts';
@@ -1018,7 +1019,7 @@ export class InputRunner {
             : `model output discarded: ${modelGuard.fault.detail}`;
       } else if (stopReason === 'error') {
         status = 'failed';
-        errorCode = 'MODEL_ERROR';
+        errorCode = classifyModelFailure(providerError);
         detail = `model run failed: ${providerError || 'unknown provider error'}`;
       } else if (stopReason === 'aborted') {
         status = 'stopped';

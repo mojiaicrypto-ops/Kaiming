@@ -35,6 +35,7 @@ import type { RunOutcome } from '../runtime/runner.ts';
 import { createSandboxRuntime, type SandboxMode } from '../runtime/os-sandbox.ts';
 import { isHiddenRawQuestionAnswerEvent } from '../runtime/raw-question.ts';
 import { isHiddenInternalTurnEvent } from '../runtime/model-output-guard.ts';
+import { classifyModelFailure, publicFailureDetail } from '../runtime/model-error.ts';
 import { resolveStoredConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 import { contextNoticeOf, contextUsageOf, windowOnlyContext, type ContextUsageView } from '../runtime/context-usage.ts';
@@ -227,6 +228,34 @@ export async function startWorkbench(options: StartOptions): Promise<{
     },
   });
   /**
+   * Publish one terminal input frame: the browser can show or clear the exact failure without
+   * waiting for a resync. The persisted row remains the authority for reloads.
+   */
+  const publishInputSettled = (sessionId: string, inputId: string): void => {
+    const input = store.getInput(inputId);
+    if (input === undefined) return;
+    if (
+      input.status !== 'completed' &&
+      input.status !== 'failed' &&
+      input.status !== 'stopped' &&
+      input.status !== 'interrupted'
+    ) {
+      return;
+    }
+    hub.publish(
+      sessionId,
+      {
+        type: 'input',
+        inputId: input.inputId,
+        status: input.status,
+        ...(input.errorCode === null
+          ? {}
+          : { error: { code: input.errorCode, message: publicFailureDetail(input.errorMessage) } }),
+      },
+      { inputId: input.inputId },
+    );
+  };
+  /**
    * One handler for every run that settles: worker-owned runs and runs the chief's dispatch tool
    * started directly. The latter used to finish silently when the chief's turn had already ended.
    */
@@ -251,6 +280,9 @@ export async function startWorkbench(options: StartOptions): Promise<{
     if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'stopped' || outcome.kind === 'interrupted') {
       const input = store.getInput(outcome.inputId);
       const taskId = input?.taskId ?? null;
+      // Terminal input state reaches the browser even when this session's own turn is the only
+      // thing that ended (a chief provider failure has no Task card to trigger a refresh).
+      publishInputSettled(sessionId, outcome.inputId);
       if (taskId !== null) {
         const task = store.getTask(taskId);
         if (task !== undefined && task.chiefSessionId !== sessionId) {
@@ -322,6 +354,22 @@ export async function startWorkbench(options: StartOptions): Promise<{
     },
     onRunSettled: handleOutcome,
     onEvent: (sessionId, event, meta) => {
+      // A provider error is knowledge the moment Pi reports it: the browser must not wait for the
+      // run's final bookkeeping (or a reload) to learn why the turn is empty.
+      const raw = event as { type?: unknown; message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown } };
+      if (raw.type === 'message_end' && raw.message?.role === 'assistant' && raw.message.stopReason === 'error') {
+        const detail = String(raw.message.errorMessage ?? '');
+        hub.publish(
+          sessionId,
+          {
+            type: 'input',
+            inputId: meta.inputId,
+            status: 'failed',
+            error: { code: classifyModelFailure(detail), message: publicFailureDetail(detail) },
+          },
+          { inputId: meta.inputId, epoch: meta.epoch },
+        );
+      }
       // The recovered answer is user-context for the model only; the interaction row already tells
       // the browser what the user chose, so a second system-authored bubble would be noise.
       if (isHiddenInternalTurnEvent(event)) return;

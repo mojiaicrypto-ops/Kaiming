@@ -16,6 +16,12 @@ import { showBrowserNotification } from '../lib/notifications';
 export interface ReminderSnapshot {
   readonly sessionId: string;
   readonly busy: SessionActivity;
+  /** The latest failed input, so an error cannot be announced as a normal completion. */
+  readonly inputErrorId: string | null;
+  /** The terminal input frame has not arrived: even idle is not yet a known completion. */
+  readonly settling: boolean;
+  /** Only a completed terminal frame may raise the success reminder; a stop is not a completion. */
+  readonly terminalStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
   readonly pending: ReadonlySet<string>;
 }
 
@@ -27,12 +33,20 @@ export type ReminderEvent =
  * What changed between two snapshots. A new question wins over a completion in the same tick: the
  * turn may have ended because it is now waiting for the user, and one reminder is enough. `queued`
  * and `stopping` are not "processing", so a canceled queue or a user stop does not look complete.
+ * A failed input is not a completion either: the error banner is the result, not a success chime.
  */
 export function reminderEvents(previous: ReminderSnapshot, current: ReminderSnapshot): ReminderEvent[] {
   if (previous.sessionId !== current.sessionId) return [];
   const newQuestions = [...current.pending].filter((id) => !previous.pending.has(id));
   if (newQuestions.length > 0) return [{ kind: 'question', count: newQuestions.length }];
-  if (previous.busy === 'processing' && current.busy === 'idle' && current.pending.size === 0) {
+  if (
+    (previous.busy === 'processing' || previous.settling) &&
+    current.busy === 'idle' &&
+    current.pending.size === 0 &&
+    current.inputErrorId === null &&
+    current.terminalStatus === 'completed' &&
+    !current.settling
+  ) {
     return [{ kind: 'turn-complete' }];
   }
   return [];
@@ -74,6 +88,9 @@ export function useSessionReminders(options: SessionRemindersOptions): void {
       sessionId: options.sessionId,
       busy: options.slot.busy,
       pending: openPending(options.slot.pending),
+      inputErrorId: options.slot.inputError?.inputId ?? null,
+      settling: options.slot.settlingInputId !== null,
+      terminalStatus: options.slot.terminalStatus,
     };
     const before = previous.current;
     previous.current = next;
@@ -100,5 +117,5 @@ export function useSessionReminders(options: SessionRemindersOptions): void {
         toast(text, event.kind === 'question' ? 'info' : 'success');
       }
     }
-  }, [options.active, options.sessionId, options.slot.busy, options.slot.pending, options.onScreen, options.onActivate, t]);
+  }, [options.active, options.sessionId, options.slot.busy, options.slot.pending, options.slot.inputError, options.slot.settlingInputId, options.slot.terminalStatus, options.onScreen, options.onActivate, t]);
 }

@@ -186,6 +186,7 @@ const en = {
   'recovery.ack': 'Dismiss',
   'banner.blocked': 'Blocked',
   'banner.blockedAck': 'Got it',
+  'banner.runFailed': 'Run failed',
   'banner.historyProblems': 'History read warning ({count}) — messages may be incomplete',
 
   // ---------- queued inputs ----------
@@ -603,6 +604,13 @@ const en = {
   'error.RUN_TIMEOUT': 'The run exceeded its time limit',
   'error.MODEL_OUTPUT_CORRUPTED': 'The model produced a degenerate or malformed response; the run was stopped',
   'error.REPORT_RETRY_EXHAUSTED': 'The report failed repeatedly; the retry budget was exhausted and the run was stopped',
+  'error.MODEL_UNAVAILABLE': 'No usable model',
+  'error.MODEL_QUOTA_EXHAUSTED': 'The model quota is exhausted — check the provider balance or switch models in Settings',
+  'error.MODEL_RATE_LIMITED': 'The model provider is rate-limiting requests — retry later or switch models',
+  'error.MODEL_AUTH_FAILED': 'The model credential is invalid or expired — update the API key in Settings',
+  'error.MODEL_CONTEXT_EXCEEDED': 'The request exceeds the model context window — compact the conversation or use a larger-window model',
+  'error.MODEL_ERROR': 'The model request failed — the provider detail is shown below',
+  'error.modelSettings': 'Model settings',
   'error.blocked_config': 'No usable model',
   'error.blocked_role': 'The role is not configured',
   'error.blocked_project': 'The project cannot be used',
@@ -786,6 +794,7 @@ export const zhCN: Record<MessageKey, string> = {
   'recovery.ack': '知道了',
   'banner.blocked': '已阻断',
   'banner.blockedAck': '知道了',
+  'banner.runFailed': '运行失败',
   'banner.historyProblems': '历史读取警告（{count}）— 消息可能不完整',
 
   // ---------- queued inputs ----------
@@ -1197,6 +1206,13 @@ export const zhCN: Record<MessageKey, string> = {
   'error.RUN_TIMEOUT': '运行超时',
   'error.MODEL_OUTPUT_CORRUPTED': '模型输出发生退化或格式错误，运行已中止',
   'error.REPORT_RETRY_EXHAUSTED': '报告连续失败，重试预算已用尽，运行已终止',
+  'error.MODEL_UNAVAILABLE': '没有可用模型',
+  'error.MODEL_QUOTA_EXHAUSTED': '模型额度已用尽 — 请检查服务商余额，或在设置中切换模型',
+  'error.MODEL_RATE_LIMITED': '模型服务正在限流 — 稍后重试，或切换模型',
+  'error.MODEL_AUTH_FAILED': '模型凭证无效或已过期 — 请在设置中更新 API Key',
+  'error.MODEL_CONTEXT_EXCEEDED': '请求超出模型上下文窗口 — 请压缩会话或换用更大窗口的模型',
+  'error.MODEL_ERROR': '模型请求失败 — 具体原因见下方服务商信息',
+  'error.modelSettings': '模型设置',
   'error.blocked_config': '没有可用模型',
   'error.blocked_role': '角色未配置',
   'error.blocked_project': '项目不可用',

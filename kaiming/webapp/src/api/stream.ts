@@ -26,6 +26,14 @@ export interface SandboxStatusView {
   active: boolean;
   reason: string | null;
 }
+/** The latest terminal failure the browser must show; a later input clears it. */
+export interface InputErrorView {
+  /** The input whose run failed; used to ignore a late frame from an older turn. */
+  inputId: string;
+  code: string;
+  message: string;
+  status: 'failed' | 'interrupted';
+}
 
 export interface PreparedSnapshot {
   sessionId: string;
@@ -56,6 +64,8 @@ export interface PreparedSnapshot {
     /** How many documents the retained message carries. */
     documentCount?: number;
   }>;
+  /** Why the latest input failed, or null when the latest input did not fail. */
+  lastInputError?: InputErrorView | null;
   messages: readonly HistoryMessage[];
   /** True when the history has more messages than this snapshot carries. */
   hasEarlier?: boolean;
@@ -82,9 +92,13 @@ export interface PendingInteraction {
 }
 
 export interface StreamFrame {
-  type: 'pi' | 'invalidate' | 'blocked' | 'resync' | 'context';
-  seq?: number;
+  type: 'pi' | 'invalidate' | 'blocked' | 'resync' | 'context' | 'input';
+  // `input` is a terminal (or immediately failed) turn: the slot uses it to show/clear the error
+  // without waiting for a resync. Other frame fields below stay shared for compatibility.
   inputId?: string;
+  status?: 'completed' | 'failed' | 'stopped' | 'interrupted';
+  error?: { code: string; message: string };
+  seq?: number;
   event?: { type: string; [key: string]: unknown };
   /** Carried by a `context` notice: the occupancy itself, so no re-read is needed. */
   context?: ContextView;

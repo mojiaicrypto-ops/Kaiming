@@ -5,10 +5,16 @@ const snapshot = (
   busy: ReminderSnapshot['busy'],
   pending: readonly string[],
   sessionId = 's-1',
+  inputErrorId: string | null = null,
+  settling = false,
+  terminalStatus: ReminderSnapshot['terminalStatus'] = 'completed',
 ): ReminderSnapshot => ({
   sessionId,
   busy,
   pending: new Set(pending),
+  inputErrorId,
+  settling,
+  terminalStatus,
 });
 
 describe('session reminder transitions', () => {
@@ -16,6 +22,25 @@ describe('session reminder transitions', () => {
     expect(reminderEvents(snapshot('processing', []), snapshot('idle', []))).toEqual([
       { kind: 'turn-complete' },
     ]);
+  });
+
+  it('does not announce a failed turn as a completion', () => {
+    expect(reminderEvents(snapshot('processing', []), snapshot('idle', [], 's-1', 'i-1'))).toEqual([]);
+  });
+
+  it('does not treat a stopped or failed terminal as a completion', () => {
+    expect(reminderEvents(snapshot('processing', []), snapshot('idle', [], 's-1', null, false, 'stopped'))).toEqual([]);
+    expect(reminderEvents(snapshot('processing', []), snapshot('idle', [], 's-1', null, false, 'failed'))).toEqual([]);
+  });
+
+  it('waits for the terminal input frame before announcing completion', () => {
+    expect(reminderEvents(snapshot('processing', []), snapshot('idle', [], 's-1', null, true))).toEqual([]);
+    expect(
+      reminderEvents(
+        snapshot('idle', [], 's-1', null, true),
+        snapshot('idle', [], 's-1', null, false),
+      ),
+    ).toEqual([{ kind: 'turn-complete' }]);
   });
 
   it('does not treat a new run, a canceled queue, or a user stop as completion', () => {

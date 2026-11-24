@@ -28,7 +28,7 @@
 
 - 导航是顶栏文字标签，当前项由地址决定；`/`、`/project`、`/settings/*` 可刷新、可分享；访问 `/requirements` 时客户端重定向到 `/project`，快捷键 2 仍指向它。
 - Chat 屏区域顺序固定：横幅 → 任务条 → 转录（宽 90% 居中）→ dock（问题面板 / 队列 / 输入框 / 提示）。
-- 提醒：当前会话从 `processing` 结束到 `idle` 且没有待答问题时提示“对话已完成”；出现新的待答问题时提示“有新的问题需要回答”。聊天屏且窗口聚焦用页内 toast；窗口隐藏、失焦或不在聊天屏时优先使用已授权的浏览器通知，点击通知回到聊天。首次发送消息时请求通知权限；不支持或拒绝时只保留 toast，不重复询问。
+- 提醒：当前会话从 `processing` 结束到 `idle` 且没有待答问题时提示“对话已完成”；出现新的待答问题时提示“有新的问题需要回答”。但失败输入不是完成：有 `lastInputError` 时只显示错误横幅，不提示“对话已完成”。聊天屏且窗口聚焦用页内 toast；窗口隐藏、失焦或不在聊天屏时优先使用已授权的浏览器通知，点击通知回到聊天。首次发送消息时请求通知权限；不支持或拒绝时只保留 toast，不重复询问。
 - 断点：`≤1100` 看板 4→2 列；`≤860` 会话列收为顶栏按钮 + 抽屉、设置菜单横置、内容取消 90% 限制、顶栏仅显示连接符号、文件查看器的树移到上方 32%；`≤560` 抽屉全宽、选项行 ≥44px、顶栏连线符号化、composer 压缩留出正文、Toast 抬到 dock 之上；`≤400` 导航标签换成图标（文字仍在 DOM 内，是读屏的可读名称）。
 - 状态栏模型区：`provider/model · 已用 / 窗口 · 百分比`。占用是 Pi 对下一次请求的估算：≥70% 用 `--decide`、≥90% 用 `--block`，且数字本身在列（不能只靠颜色）；压缩后到下一次响应前显示 `?`，本进程没有该会话实例时显示 `—`，两种情况都保留窗口。`≤860` 收紧状态栏间距；`≤560` 只留百分比（未知时保留 `— / 窗口`）；`≤480` 隐藏分支；`≤400` 再隐藏“N 个 Agent 运行中”，保留模型、读数与连接状态；空间不足时先截断路径与快捷键提示，模型名最后才收缩，连接状态始终保留。`title` 给出绝对 tokens、估算说明与自动压缩是否开启。
 - **移动端形态待重做**（见[缺口登记 M1–M5](gap-register.md#m-移动端方向已定尚未实施)）：当前窄屏是压缩版，不是移动端形态；目标是底部固定 Tab Bar + 全屏会话列表 + 顶栏只留项目与连接。下列约束在重做时必须继续成立（每条都由真实 320/390px 截图与用例锁定）：
@@ -59,16 +59,16 @@
 
 ## U4 组件
 
-`app/`：TopBar、StatusBar、ProjectDialog、Drawer、State（状态符号+词）、router。
+`app/`：TopBar、StatusBar、ProjectDialog、Drawer、State（状态符号+词）、router、ErrorBoundary（根渲染异常的可恢复屏幕，不让空白 root 冒充运行中）。
 
 状态栏的沙箱徽标显示 `sandbox{mode,backend,active,reason}`：数据来自 `session.get` / `session.stream.prepare` 的实时启动探针状态，不读历史输入的 `config`。`off` 显示「保护已关闭」，`auto`/`strict` 不可用显示「沙箱不可用」并带原因；页面切换会话时以新快照为准，不沿用旧值。
-`chat/`：SessionsList、Banner、TaskStrip、TaskTodo、Transcript、MessageItem、ThinkingBlock、Markdown、ToolCard、ToolTask、ToolBusiness（question / report / backlog）、InteractionPanel、QueuedInputs、Composer、EmptyState、MemberDrawer、TaskDrawer。
+`chat/`：SessionsList、Banner、InputErrorNotice、TaskStrip、TaskTodo、Transcript、MessageItem、ThinkingBlock、Markdown、ToolCard、ToolTask、ToolBusiness（question / report / backlog）、InteractionPanel、QueuedInputs、Composer、EmptyState、MemberDrawer、TaskDrawer。
 `files/`：FileViewer（唯一文件查看画布）、SourceView（源码视图：行号 + 高亮 + 查找）、MarkdownView（`.md` 渲染/源码两态）、file-kind（按扩展名决定显示方式与语法）、link-target（链接归属解析）、paths（路径与字节地址助手）；`lib/highlight.ts` 是唯一语法注册表。
 `project/`：ProjectPage（问题提示、进行中、待办、模块、早期文件）、BacklogDrawer（详情与编辑）、project-model（分组、等你决定、模块截取、冲突草稿）。
 `settings/`：SettingsPage、ProvidersPage、ModelsPage、AppearancePage。
 `auth/`：LoginPage。
 
-规则：状态一律用 `State` 渲染，不直接写颜色；界面文案一律经 `i18n/catalog.ts`。
+规则：状态一律用 `State` 渲染，不直接写颜色；界面文案一律经 `i18n/catalog.ts`。根渲染异常由 `ErrorBoundary` 显示错误详情和重新加载入口；它不能替代业务错误横幅，后者来自真实的输入终态。
 
 信息密度的待改项（消息间距分档、成员状态去重、工具卡默认折叠、执行面板限高）见 [缺口登记 Q1–Q4](gap-register.md#q-待改已决定方向尚未实施)，尚未实施。
 
@@ -94,7 +94,7 @@
 | 操作反馈 | STOP、Task 暂停/继续、手动压缩点击后立即进入处理中并禁用，不只等事件/轮询；请求失败恢复控件并说明原因，真实状态仍由服务端快照/事件纠正。 |
 | 空态 | 字标 + 一句规则 + 三个示例 |
 | 连接 | 尚无会话 / 连接中 / 已连接 / 重连中 / 离线，横幅给出后果与重试。没有会话时顶栏与底栏都是「尚无会话」而不是「连接中」，空对话区给一条安静说明（不是「连接已断开」），并提供「新建会话」；真断线才显示重连横幅。浏览器记着的会话若服务端已没有（清库、清理过），一律丢弃，不得让它把空工作台带进「重连中」——迟到的 prepare 失败也不得改写当前状态 |
-| 错误 | 业务拒绝不清 token；历史读取警告可展开 |
+| 错误 | 业务拒绝不清 token；历史读取警告可展开。**模型运行失败**（额度、限流、凭证、上下文或未知 provider 错误）显示在会话区域顶部：分类文案 + 服务商原文 + 模型设置入口；错误由 `lastInputError` 快照与实时 `input` 帧共同保证，刷新仍在；后续输入受理即清除。失败不是“对话已完成”，不发完成提醒。根组件渲染异常显示 `data-testid=app-error` 的详情与重新加载，不留白屏 |
 
 ## U11 文件与报告查看器
 
@@ -167,7 +167,7 @@
 | 类型 | `npm run typecheck`（服务端）、`npm --prefix webapp run typecheck` |
 | 文案 | `test/web-i18n-keys.test.ts`：键一致、无缺失、无空值、占位符一致 |
 | 构建 | `npm run build` 成功产出 `web-static/index.html` |
-| 浏览器 | `broad`/发布：`npm run test:browser`（先构建再跑）：三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、任务条与推送、模型范围、思考等级、项目页（新增/编辑/冲突/等你决定/模块）、文件/报告阅读、更早历史、重绑定、任务列表、焦点陷阱、错误文案、五档视口、主题切换。`focused` 只跑本次相关用例。 |
+| 浏览器 | `broad`/发布：`npm run test:browser`（先构建再跑）：三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、任务条与推送、模型范围、思考等级、模型额度失败横幅与刷新保留、项目页（新增/编辑/冲突/等你决定/模块）、文件/报告阅读、更早历史、重绑定、任务列表、焦点陷阱、错误文案、五档视口、主题切换。`focused` 只跑本次相关用例。 |
 | 单测 | `broad`/发布：`npm test` 全绿；`focused` 只跑受影响测试文件，`visual` 不跑测试。 |
 
 ## U9 方法消费

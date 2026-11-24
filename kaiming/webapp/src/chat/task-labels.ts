@@ -1,6 +1,6 @@
-import { useI18n } from '../i18n/I18nProvider';
+import { useI18n, type Translate } from '../i18n/I18nProvider';
 import type { SessionActivity } from '../api/stream';
-import { MESSAGE_KEYS } from '../i18n/catalog';
+import { MESSAGE_KEYS, type MessageKey } from '../i18n/catalog';
 
 /** The phase names a Task really has, and the label each one shows. */
 const PHASE_KEY = {
@@ -45,9 +45,10 @@ export interface TaskMemberRow {
 }
 
 /** The catalog key for a terminal error code, or null when no sentence exists for it. */
-export function catalogErrorKey(code: string | null | undefined): 'error.blocked_config' | null {
+export function catalogErrorKey(code: string | null | undefined): MessageKey | null {
   if (code === null || code === undefined || code === '') return null;
-  return MESSAGE_KEYS.includes(`error.${code}` as never) ? (`error.${code}` as 'error.blocked_config') : null;
+  const key = `error.${code}`;
+  return MESSAGE_KEYS.includes(key as MessageKey) ? (key as MessageKey) : null;
 }
 
 /**
@@ -59,7 +60,7 @@ export function catalogErrorKey(code: string | null | undefined): 'error.blocked
  */
 export function reportReasonOf(
   row: Pick<TaskMemberRow, 'lastInputStatus' | 'errorCode'>,
-  t: (key: 'error.blocked_config' | 'task.state.failed') => string,
+  t: Translate,
 ): string | null {
   if (row.lastInputStatus !== 'failed') return null;
   if (row.errorCode === null || row.errorCode === undefined || row.errorCode === '') return null;

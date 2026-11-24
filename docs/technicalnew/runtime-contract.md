@@ -54,7 +54,7 @@
 | backlog.add/update/close/reopen | projectId、内容或 id、expectedDigest?、note?、state、taskIds? | 界面的写入口（模型用 `backlog` 工具的 add/close/edit）：更新与重开必须带 expectedDigest，不一致返回 VERSION_CONFLICT 并带回当前条目；写入在项目锁内、原子替换 |
 | interaction.list（修改） | projectId、sessionId?（省略即本项目全部） | 省略 sessionId 时返回本项目全部未回答的问题，每条带 taskId 与 sourceSessionId；给出时行为不变；只读，不需要实时订阅 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
-| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）；另含 `compacting`（Pi 正在摘要）与实时 `sandbox{mode,backend,active,reason}`（启动探针状态，独立于输入历史）。`inputs` 的 queued 项附 `text/imageCount`，队列直接显示用户正文，不用 inputId 代替。先缓冲后读快照，见 M4 |
+| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）；另含 `compacting`（Pi 正在摘要）与实时 `sandbox{mode,backend,active,reason}`（启动探针状态，独立于输入历史）；`lastInputError` 是最新 failed 输入的 `{inputId,status,code,message}`（未由宿主持久化关闭的 interrupted 成员也可显示；主管 watchdog 中断先被宿主记为 stopped，仍走恢复路径），旧 `MODEL_ERROR` 按消息分类，后续输入清除；失败/中断发生时另发 `input{inputId,status,error}` 实时帧。`inputs` 的 queued 项附 `text/imageCount`，队列直接显示用户正文，不用 inputId 代替。先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
 | config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
 | project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |
@@ -177,6 +177,7 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 | UNAUTHORIZED / FORBIDDEN / NOT_FOUND | 会话凭证、项目归属或目标不存在；先解决访问，不能隐式换目标 |
 | INVALID_ARGUMENT / REQUEST_CONFLICT / VERSION_CONFLICT | Schema、同请求不同参数、CAS 冲突（宿主 RPC 与界面操作）；返回字段/当前状态，调用者重新核对 |
 | PROJECT_UNAVAILABLE / MODEL_UNAVAILABLE | 尚未开始输入保留 queued 和原因；已有历史/看板仍可读 |
+| MODEL_QUOTA_EXHAUSTED / MODEL_RATE_LIMITED / MODEL_AUTH_FAILED / MODEL_CONTEXT_EXCEEDED / MODEL_ERROR | 已开始的输入以 failed 记录；浏览器显示分类文案与服务商原文，提供模型设置入口；不自动重试或换模型，后续输入才清除 |
 | HISTORY_UNAVAILABLE / PI_INPUT_UNCONFIRMED | 精确恢复/关联不成立；保留记录，进入检查或交接 |
 | STORAGE_UNAVAILABLE / EFFECT_UNCONFIRMED | 保存或效果不可确认；停止后续准入，不把已可能生效的操作自动重做 |
 | WORKSPACE_BUSY / TASK_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |

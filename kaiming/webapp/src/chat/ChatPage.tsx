@@ -61,6 +61,8 @@ export interface ChatPageProps {
   readonly railOpen: boolean;
   /** Open one project file in the viewer: report links and evidence go through the same canvas. */
   readonly onOpenFile: (path: string) => void;
+  /** Model failures point at the settings screen; the banner owns the actual sentence. */
+  readonly onOpenSettings: () => void;
 }
 
 /**
@@ -68,7 +70,7 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, projectRealPath, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onArchiveSession, onRenameSession, onForkSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail, onOpenFile }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, projectRealPath, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onArchiveSession, onRenameSession, onForkSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail, onOpenFile, onOpenSettings }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
@@ -489,6 +491,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
           onDismissInterrupted={() => setRecoveryDismissed(true)}
           status={session.status}
           blocked={session.blocked}
+          inputError={session.slot.inputError}
+          onOpenSettings={onOpenSettings}
           onDismissBlocked={session.dismissBlocked}
           onRetry={session.retry}
           onNewSession={onNewSession}

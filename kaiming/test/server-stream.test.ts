@@ -668,4 +668,53 @@ describe('stream preparation', () => {
     const clear = await h.prepare('s-clear');
     expect(clear.snapshot['blocked']).toBeNull();
   });
+
+  it('carries the latest failed input and clears it after a later successful turn', async () => {
+    const h = await harness();
+    h.store.createSession({ id: 's-error', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    const accept = (inputId: string): void => {
+      h.store.acceptInput({
+        inputId,
+        projectId: h.projectId,
+        sessionId: 's-error',
+        sourceKey: `s-error:${inputId}`,
+        requestKey: inputId,
+        method: 'session.input.submit',
+        kind: 'user',
+        payload: { content: [{ type: 'text', text: inputId }] },
+      });
+    };
+    const finish = (inputId: string, completed: boolean): void => {
+      const claim = h.store.claimNextInput('s-error');
+      if (claim.kind !== 'claimed') throw new Error(`expected a claim, got ${claim.kind}`);
+      h.store.finishInput({
+        inputId: claim.input.inputId,
+        expectedRevision: claim.input.revision,
+        status: completed ? 'completed' : 'failed',
+        ...(completed
+          ? {}
+          : {
+              errorCode: 'MODEL_ERROR',
+              errorMessage:
+                '429 {"type":"error","error":{"type":"rate_limit_error","message":"Kiro: usage limit reached ... (MONTHLY_REQUEST_COUNT)"}}',
+            }),
+      });
+      expect(claim.input.inputId).toBe(inputId);
+    };
+
+    accept('i-failed');
+    finish('i-failed', false);
+    const failed = await h.prepare('s-error');
+    expect(failed.snapshot['lastInputError']).toMatchObject({
+      inputId: 'i-failed',
+      status: 'failed',
+      code: 'MODEL_QUOTA_EXHAUSTED',
+    });
+    expect((failed.snapshot['lastInputError'] as { message: string }).message).toContain('MONTHLY_REQUEST_COUNT');
+
+    accept('i-recovered');
+    finish('i-recovered', true);
+    const recovered = await h.prepare('s-error');
+    expect(recovered.snapshot['lastInputError']).toBeNull();
+  });
 });

@@ -3,11 +3,15 @@ import { emptySlot, slotReducer } from '../src/state/slot';
 import type { HistoryMessage } from '../src/state/slot';
 import type { PreparedSnapshot } from '../src/api/stream';
 
-function snapshotOf(messages: unknown[]): PreparedSnapshot {
+function snapshotOf(
+  messages: unknown[],
+  lastInputError: PreparedSnapshot['lastInputError'] = null,
+): PreparedSnapshot {
   return {
     sessionId: 's-1', projectId: 'p-1', roleId: 'chief', activity: 'idle',
     currentInputId: null, inputs: [], messages: messages as never,
     interactions: [], historyLeaf: null, historyProblems: [],
+    lastInputError,
   };
 }
 
@@ -187,6 +191,38 @@ describe('slot merge', () => {
       { entryId: 'h5', role: 'assistant', content: [{ type: 'text', text: 'five' }] },
     ]) });
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['h1', 'h2', 'h4', 'h5']);
+  });
+});
+describe('input failure state', () => {
+  const quota = { inputId: 'i-1', code: 'MODEL_QUOTA_EXHAUSTED', message: 'Kiro: usage limit reached', status: 'failed' as const };
+
+  it('comes from the snapshot, survives a stale frame, and clears on the current input settling', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([], quota),
+    });
+    expect(slot.inputError).toEqual(quota);
+
+    // A new input is the user's decision to move on: its submit receipt clears the old error.
+    slot = slotReducer(slot, { type: 'inputAccepted', inputId: 'i-2' });
+    expect(slot.inputError).toBeNull();
+
+    // A late frame from the older input must not resurrect it over the newer input.
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'input', inputId: 'i-1', status: 'failed', error: { code: quota.code, message: quota.message } },
+    });
+    expect(slot.inputError).toBeNull();
+
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'input', inputId: 'i-2', status: 'failed', error: { code: 'MODEL_AUTH_FAILED', message: 'bad key' } },
+    });
+    expect(slot.inputError).toMatchObject({ inputId: 'i-2', code: 'MODEL_AUTH_FAILED' });
+
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'input', inputId: 'i-2', status: 'completed' } });
+    expect(slot.inputError).toBeNull();
   });
 });
 
@@ -546,5 +582,23 @@ describe('slot · context occupancy', () => {
     });
     slot = slotReducer(slot, { type: 'reset' });
     expect(slot.context).toBeNull();
+  });
+});
+
+describe('terminal settling', () => {
+  it('holds completion until the input frame, then clears both settling and error', () => {
+    let slot = slotReducer(emptySlot(), { type: 'inputAccepted', inputId: 'i-1' });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', event: { type: 'agent_end' } },
+    });
+    expect(slot.settlingInputId).toBe('i-1');
+
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'input', inputId: 'i-1', status: 'completed' },
+    });
+    expect(slot.settlingInputId).toBeNull();
+    expect(slot.inputError).toBeNull();
   });
 });
