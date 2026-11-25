@@ -3,12 +3,12 @@
 本页记录开明（Kaiming）各模块的验证基线、关键实现证据与边界，不定义协议。整理日期：2026-11-18。下一轮开发计划与未关闭风险见 [缺口登记](gap-register.md)。
 
 ---
-
-## 一、当前验证基线总览（截至 2026-11-24）
+本页记录开明（Kaiming）各模块的验证基线、关键实现证据与边界，不定义协议。整理日期：2026-11-25。下一轮开发计划与未关闭风险见 [缺口登记](gap-register.md)。
+## 一、当前验证基线总览（截至 2026-11-25）
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **72 文件 / 742 用例通过**（SQLite WAL 接纳/认领/迁移至 v19、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **73 文件 / 758 用例通过**（SQLite WAL 接纳/认领/迁移至 v21、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、沙箱激活时普通删除免确认、写入型/执行型 heredoc 区分、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
 | **前端单元** | `npm --prefix kaiming/webapp test` | **21 文件 / 146 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、输入失败横幅与终态等待、根错误边界等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
@@ -203,3 +203,26 @@
 - **实现**：新增纯分类器 `runtime/model-error.ts`，把额度/限流/凭证/上下文/未知错误映射为 `MODEL_QUOTA_EXHAUSTED`、`MODEL_RATE_LIMITED`、`MODEL_AUTH_FAILED`、`MODEL_CONTEXT_EXCEEDED`、`MODEL_ERROR`，服务商原文保留；`runner` 存真实分类；`session.stream.prepare` 返回最新 failed 输入的 `lastInputError`（未关闭的成员 interrupted 也可显示；主管 watchdog 中断先被宿主记为 stopped，仍走恢复路径；旧 `MODEL_ERROR` 在读取时分类，无需迁移）；Pi `message_end` 错误与运行终态发布顶层 `input` SSE 帧；快照与真实帧分别覆盖刷新与实时。前端 `slot` 持有错误并忽略旧输入迟到帧，`agent_end` 后等待终态帧再允许完成提醒，`InputErrorNotice` 显示双语分类句、服务商原文和模型设置入口；根 `ErrorBoundary` 把渲染异常变成可读错误页和重新加载。
 - **证据**：`test/model-error.test.ts` 5/5（真实 Kiro 月额度样本必须归额度；`429 Rate limit reached ...` 必须归限流；401/上下文/未知 negative control；详情截断）；`runtime` 月额度真实 stub 用例通过；`server-stream` 快照持久化/清除旧分类通过；webapp focused 43/43（`slot` 终态等待、提醒、边界 markup）；全量 72 文件 742/742、前端 21/146、两套 typecheck、构建、`check:prompts` 15/15；浏览器 `browser/model-error.spec.ts` 1/1（额度横幅、无完成提醒、刷新仍可见、设置入口）；既有完成提醒用例 1/1。全量浏览器为 74/76；失败是既有 acceptance 的 task-create 用例缺少 `verificationProfile` 与状态栏宽度注入用例，均不作为本次通过证据。真实 prepdex 数据用于问题定位；未用其真实凭证重放。
 - **边界**：不自动重试、不换模型、不把 provider 失败改成成功；provider 自身的重试可能让错误横幅晚于首次 429 出现；分类只基于 provider 文本，未知仍保留原文。`ErrorBoundary` 只覆盖 React 渲染异常，事件处理器/网络错误走各自 banner/toast；本次未做全站故障注入。
+
+### 2026-11-25 · 宿主 GUI 取证 tool
+
+- **问题**：P3-1 后 tester 沙箱内的系统 Chrome 会在 `ProcessSingleton` 创建 socket 目录时失败，`screencapture` 也被 macOS TCC 拒绝；桌面窗口、托盘图标和菜单栏因此只能间接验证。把 `screencapture` 移到宿主 tool 并不能自动获得 TCC，必须有持有 Screen Recording 权限的签名进程。
+- **实现**：新增宿主侧只读 `gui` tool，固定 `screen/region/window` 目标，参数边界与跨目标字段在 TS 侧校验，PNG 走既有附件存储并返回 image 内容块；通过 LaunchServices 启动 `kaiming/native/GuiCapture.app`，helper 只接收固定 argv 并调用 CoreGraphics。`tester/developer` 获得 `gui`（read Task 保留），其他角色不获得；不修改 OS 沙箱、不启动 Chrome、不执行任意命令。新增 `kaiming/native/{gui-capture.swift,Info.plist,build.sh}` 与 `npm --prefix kaiming run build:gui`；G1、tester v8、developer v9 与 TCC 说明同步。
+- **证据**：`gui-tool` 8/8（screen/region/window 校验、未知/跨目标字段、固定 argv、附件、TCC/helper/缺图错误、非 macOS）；`tool-sets` 16/16（tester/developer 有 `gui`，其他角色无，read Task 保留）；`external-tools-runtime` 6/6（真实 Pi 运行时 tester 的 activeTools 含 `gui`，非法 region 在 helper 前返回 `INVALID_ARGUMENT`）；全量 73 文件 752/752；`tsc`；`check:prompts` 15/15；`bash kaiming/native/build.sh` 编译并 ad-hoc 签名成功；helper 非法参数返回 `INVALID_ARGUMENT`，宿主 TCC 未授权时 `screen` 返回 `TCC_DENIED`；`open -W` 启动 helper 并读取 status 的链路已验证。
+- **边界**：本机未给 `Kaiming GUI Capture` 授予 Screen Recording，因此真实像素截图未验证，不能宣称托盘/菜单栏外观已可视化；ad-hoc helper 重新构建可能重置 TCC，需重新授权。系统 Chrome 仍不在 tester 沙箱内启动；网页继续用 `browser`，应用窗口优先 `capturePage`。工具只对 developer/tester 开放，未做独立 Review/Test。
+
+### 2026-11-25 · 沙箱激活时的删除确认
+
+- **问题**：P3-1 的 `auto|strict` 已在内核层把角色写边界固定，但 `deletion-gate` 仍对 `rm`/`rmdir`/`find -delete`/脚本删除逐次发起交互；最近 Task 的确认记录显示大量 Trust all 和数小时等待。更具体地，`q-4e8a5390`（`s-73e06eea` / `t-b601964eb02a`）是测试 Agent 用 heredoc 写 B-42 测试脚本，正文里的 `rmSync` 被当成正在执行，任务一度被 pending 交互冻结；用户随后在旧进程选择 Trust all，该交互已 resolved。
+- **决定**：用户 2026-11-25 确认方案 A；接受工作区内 untracked 文件可能被普通删除的风险，不增加 Task 信任、项目开关或前端配置。`off`、高危 Git 清理、主管只读和 settler 保持原确认。
+- **实现**：`deletion-gate` 在规则匹配前只剥离**写入型** heredoc 正文：`cat` 在 `<<` 前或后有输出重定向、`tee`、`git commit -F -`；`bash`/`sh`/`python3`/`node` 等执行型 heredoc 保留正文，`<<` 后接解释器管道时也不剥离。`git commit -F -` 的判定改用 `[ \t]` 字符类，不再误用正则字面量里的 `\\s`。删除规则增加 high-risk 标记（`git clean -f`、`git stash drop/clear`、`git branch -D`）；`sandboxActive` 仅在当前策略为 `workspace-write` 且启动探针 active 时跳过普通文件删除，其他路径保留原行为。`runner` 仅对设计/开发/测试传入该标志，`off`/chief/settler 不传。G1、P-05、AC-66、base/specialists 提示词同步。
+- **证据**：`deletion-gate` 19/19（写入型 `cat >`/`cat << >`/`tee`/`git commit -F -` 不触发；执行型 `python3`/`node`/`bash` 及 `tee`/`cat` 管道给解释器仍触发；`bash <<EOF` 内的 `git clean -f` 在沙箱 active 下仍被门禁拦截；heredoc 后真实删除仍触发；普通删除在 active workspace-write 下不询问；`git clean -f`/stash/branch 负控制；无沙箱仍询问）；`deletion-gate-runtime` 5/5（既有 approve/reject/trust 管道未回归）；全量 73 文件 758/758；`tsc`；`check:prompts` 15/15；全量测试覆盖 runner 与 P3-1 沙箱。`q-4e8a5390` 的原始 heredoc 形状已由单测覆盖；该交互在旧进程已由用户选择 Trust all 解除。
+- **边界**：旧进程已由用户选择 Trust all 解除等待；旧 PID 20482 已终止，曾启动 PID 60850 验证监听后按用户要求停止，当前没有 kaiming 进程，由用户自行重启；未在真实运行中的 B-42 tester 上重放；文本门禁不是完整 shell 解析器，复杂 heredoc/嵌套脚本仍可能漏判；未跟踪文件保护和项目级 opt-out 不在本次范围；本次未做独立 Review/Test。提示词内容变更需要重启后生效。
+
+### 2026-11-25 · 并行、返工与合流验证边界
+
+- **问题**：底层 `runAndWait`/`settleStep` 支持同一步多成员并行，但历史 663 个专业 Session / 479 个步骤中 develop/test 并行几乎为 0；`chief.md` 只写“可并行”，模型默认串行。B-42 还出现非阻塞问题拉起整轮返工、focused 跑全量套件、Tester 越位钻依赖源码。
+- **决定**：Plan 的每一步显式写 `parallel`（成员 + 精确 `writeScope`）或 `serial`（共享文件/依赖原因）；同一步用一个 `task(op=dispatch)` 带多个成员；共享契约文件前置；并行写入停稳后由 developer 续跑组合 typecheck/build，主管不跑构建/测试；Tester 可并行独立入口并隔离端口/`$TMPDIR`，主管只核对报告并集和组合验收。B-44～B-47 按 `focused` 合并，不标 `visual`。
+- **实现**：`chief.md` 增补并行决策、一次 dispatch、共享文件、合流构建归属和同类机械任务合并规则，以及非阻塞不返工边界；`reviewer.md` 增加 passed/failed 边界（只缺 Test 可执行的证据时列 `not_run`，不由只读 Reviewer 判 failed）；`tester.md` 增加复现即止损，不修生产代码/不钻依赖；`developer.md` 增加优先 `edit`/`write` 和可见 UI 必须跑一次真实入口。未新增状态、调度层或 OS 写锁。
+- **证据**：`check:prompts` 15/15；全量 73 文件 758/758；`tsc` 通过；改动内容与 D-03/D-05 的职责边界一致。`writeScope` 仍然是告警而非写锁，并行安全依赖 Plan 的精确切分。
+- **边界**：提示词缓存需重启工作台后生效；尚未用真实模型在 B-44～B-47 上验证“主动并行”，也未验证两个 Tester 的并发 Electron/浏览器环境；若实际仍越界，再考虑在 tool-guard 对 write/edit 做 writeScope 拦截。
