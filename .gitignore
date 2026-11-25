@@ -13,6 +13,7 @@ kaiming/browser/artifacts/
 **/test-results/
 **/playwright-report/
 kaiming/config/model.json
+kaiming/native/GuiCapture.app/
 
 # Old workbench data archived before a clean restart.
 .backup-*-data-*/

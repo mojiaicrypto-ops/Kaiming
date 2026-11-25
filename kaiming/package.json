@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:browser": "npm run build && playwright test",
+    "build:gui": "bash native/build.sh",
     "check:model": "node checks/real-model.ts",
     "check:latency": "node checks/latency.ts",
     "check:runtime": "node checks/runner-real-model.ts",

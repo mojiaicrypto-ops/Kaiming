@@ -60,14 +60,16 @@ const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
  */
 const WEB_TOOLS: readonly string[] = ['web_search', 'web_fetch'];
 const BROWSER_TOOLS: readonly string[] = ['browser'];
+/** Host-side native evidence; it captures pixels and never changes the project. */
+const GUI_TOOL = 'gui';
 
 /** Domain tools each role may call (registered later; the allowlist only lists their names). */
 const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
   chief: ['task', 'backlog', 'project', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
   designer: ['backlog', 'agent_report', 'task', 'question', ...WEB_TOOLS],
-  developer: ['agent_report', 'task', 'backlog', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
+  developer: ['agent_report', 'task', 'backlog', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS, GUI_TOOL],
   reviewer: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
-  tester: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
+  tester: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS, GUI_TOOL],
   // The settler records what was already verified: a fresh web lookup is not its job.
   settler: ['agent_report', 'task', 'backlog', 'question'],
   investigator: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
@@ -87,6 +89,7 @@ export const DOMAIN_TOOL_NAMES: readonly string[] = [
   'question',
   ...WEB_TOOLS,
   ...BROWSER_TOOLS,
+  GUI_TOOL,
 ];
 
 /**

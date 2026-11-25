@@ -88,6 +88,7 @@ describe('role tool sets', () => {
       'web_search',
       'web_fetch',
       'browser',
+      'gui',
     ]);
     expect(toolSetFor('reviewer', 'write').readTools).toEqual(['read', 'grep', 'find', 'ls']);
     // An investigator verifies by reading and external research; running a script needs a handoff.
@@ -124,6 +125,17 @@ describe('role tool sets', () => {
     expect(toolSetFor('designer', 'write').allowlist).not.toContain('browser');
     expect(toolSetFor('settler', 'write').allowlist).not.toContain('web_search');
     expect(toolSetFor('settler', 'write').allowlist).not.toContain('browser');
+  });
+
+  it('keeps native GUI evidence for developer/tester, including read Tasks', () => {
+    expect(toolSetFor('tester', 'write').allowlist).toContain('gui');
+    expect(toolSetFor('developer', 'write').allowlist).toContain('gui');
+    for (const roleId of ['chief', 'designer', 'reviewer', 'settler', 'investigator'] as const) {
+      expect(toolSetFor(roleId, 'write').allowlist, roleId).not.toContain('gui');
+    }
+    // A read Task loses arbitrary shell but not a fixed capture capability.
+    expect(toolSetFor('tester', 'read').allowlist).toContain('gui');
+    expect(toolSetFor('developer', 'read').allowlist).toContain('gui');
   });
 
   it('gives every role the one task tool and the chief alone the project task surface', () => {

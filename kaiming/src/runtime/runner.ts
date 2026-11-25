@@ -54,6 +54,7 @@ import { createShellAudit } from './shell-audit.ts';
 import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
+import { createGuiTool } from '../tools/gui-tool.ts';
 import { createWebFetchTool } from '../tools/web-fetch.ts';
 import { createInspectTool } from '../tools/inspect-tool.ts';
 import { createWebSearchTool } from '../tools/web-search.ts';
@@ -398,6 +399,9 @@ export class InputRunner {
       tools.push(
         createWebFetchTool({ workDir: join(options.config.agentDir, 'work', options.sessionId, 'web') }),
       );
+    }
+    if (options.roleAllowed('gui')) {
+      tools.push(createGuiTool({ agentDir: options.config.agentDir }));
     }
     if (options.roleAllowed('browser')) {
       tools.push(

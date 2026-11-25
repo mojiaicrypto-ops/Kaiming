@@ -188,4 +188,23 @@ describe('external tools in a real run', () => {
     // A read Task still drops the shell.
     expect(active).not.toContain('bash');
   });
+  it('registers gui for a tester and rejects invalid capture parameters before launch', async () => {
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'gui', arguments: JSON.stringify({ target: 'region' }) }] },
+        { kind: 'text', text: 'done' },
+      ],
+      roleId: 'tester',
+      taskType: 'write',
+    });
+    const outcome = await h.runner.runNext('s-1');
+    expect(outcome.kind).toBe('completed');
+    expect(recordedTools(h.store)).toContain('gui');
+    const binding = h.store.getSessionBinding('s-1');
+    const history = readPiHistory(binding?.piFile, h.agentDir);
+    const result = history.records.find((record) => record.role === 'toolResult' && record.toolName === 'gui');
+    expect(result?.isError).toBe(true);
+    expect(JSON.stringify(result?.content)).toContain('INVALID_ARGUMENT');
+  });
+
 });

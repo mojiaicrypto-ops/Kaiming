@@ -8,9 +8,9 @@
 |---|---|---|
 | chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/bash/inspect；五个核心工具、task（全 op）、backlog（全 op）、project、question、web_search、web_fetch、browser |
 | designer | 产品分析、模块内聚、规格与切片、适用技术架构/契约 | read/grep/find/ls/write/edit/bash、backlog（list/get/add/edit）、agent_report、task(op=get)、question、web_search、web_fetch |
-| developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、codemode、agent_report、task(op=get)、backlog.list/get、question、web_search、web_fetch、browser |
+| developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、codemode、agent_report、task(op=get)、backlog.list/get、question、web_search、web_fetch、browser、gui |
 | reviewer | 独立检查验收与范围、Plan 和实际成果 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
-| tester | Review 后独立端到端集成/E2E 验收（D-05） | read/grep/find/ls/bash、codemode、agent_report、task(op=get)、question、web_search、web_fetch、browser |
+| tester | Review 后独立端到端集成/E2E 验收（D-05） | read/grep/find/ls/bash、codemode、agent_report、task(op=get)、question、web_search、web_fetch、browser、gui |
 | settler | 更新已验证知识/记录，保存成果，关闭待办 | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、backlog（list/get/add/close/edit）、question |
 | investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
 
@@ -139,6 +139,12 @@ chief 的 op=initialize，输入 files[{path,content}]、reusedAuthorityRefs、r
 - `web_search(query, limit?, recency?)`：按可用性降级——模型同 provider 的检索端点（DeepSeek 复用已配置 key）→ `BRAVE_API_KEY` → 无凭证的 DuckDuckGo 页面。返回 title/url/snippet，并标注 provider；全部失败返回 `Error:` 与各 provider 原因，不伪造结果。单 provider 30s 上限。
 - `web_fetch(url, maxChars?, raw?)`：仅 http/https，响应 ≤5MB；HTML 转文本后**全文落盘**到 `<agentDir>/work/<sessionId>/web/<hash>.txt`，只回前 20k 字符（上限 60k）+ 路径，模型用 grep/read 精读（单页文档实测 975KB HTML → 158k 字符）。`<agentDir>/work` 是私有目录里唯一的文件读取豁免区（凭证、数据库、会话文件仍被拒绝，shell 命令仍不得提及私有目录）；响应体按上限流式读取，不信任 `content-length`。
 - `browser(action, …)`：action = open/observe/click/type/press/wait/screenshot/console/network/close。observe 给可见交互元素分配 `e1…` 引用，click/type 只接受这种引用；截图写入附件存储、以 image 内容块返回（模型可见），并在文本里给出 attachment id。headless Chromium、每会话一个、空闲 10 分钟关闭；不接用户真实浏览器。缺 Chromium 返回 `BROWSER_UNAVAILABLE`，不假装可用。
+
+### gui（宿主原生 GUI 取证）
+
+`gui(target=screen|region|window, …)` 是 macOS 宿主侧的只读原生像素工具，只对 developer/tester 开放，read Task 保留；它不改项目、不执行任意命令、不启动或操作应用。`target=screen` 可取可选 `display`，`target=region` 必须给整数 `x,y,width,height`，`target=window` 必须给 `windowId`；越界、跨目标字段和未知参数在宿主侧拒绝。成功时 PNG 走同一附件存储，返回 attachment id 和 image 内容块。
+
+它通过已签名的 `GuiCapture.app` helper 调 `CoreGraphics`，helper 是 Screen Recording（TCC）的持权进程；tool 不通过 tester `bash` 运行 `screencapture`，也不扩大 OS 沙箱。构建：`npm --prefix kaiming run build:gui`；然后在 System Settings → Privacy & Security → Screen Recording 给 `Kaiming GUI Capture` 授权一次（列表里没有时点 `+` 选择 `kaiming/native/GuiCapture.app`）。helper 是本地 ad-hoc 签名，重新构建后可能需要重新授权；没有权限时返回 `TCC_DENIED`，不得用替代图或文字冒充截图。其它平台返回 `UNSUPPORTED_PLATFORM`。网页仍用 `browser`；应用自己的窗口优先 `capturePage`，托盘/菜单栏等原生像素才用 `gui`。
 
 ### 图片输入（U10）
 
