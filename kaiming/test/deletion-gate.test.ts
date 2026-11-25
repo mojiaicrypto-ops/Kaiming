@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { createDeletionGate, deletionCommandReason, historyCommandReason } from '../src/runtime/deletion-gate.ts';
+import { createDeletionGate, deletionCommandFinding, deletionCommandReason, historyCommandReason } from '../src/runtime/deletion-gate.ts';
 
 describe('deletion command detection', () => {
   it('asks before the direct deletion commands, in every common shape', () => {
@@ -120,6 +120,37 @@ describe('deletion command detection', () => {
     expect(deletionCommandReason('echo "$(rm -rf build)"')).toBeDefined();
     expect(deletionCommandReason('echo `rm notes.md`')).toBeDefined();
   });
+
+  it('treats only writer heredoc bodies as data', () => {
+    // Writing a test script is not running it; the body is data for cat/tee/commit.
+    const cases = [
+      `cat > tests/probe.mjs <<'EOF'\nimport { rmSync } from 'node:fs'\nrmSync('/tmp/not-run', { recursive: true })\nEOF`,
+      `cat <<'EOF' > /tmp/probe.mjs\nrm -rf /tmp/not-run\nEOF`,
+      `tee /tmp/probe.mjs <<'EOF'\nrm -rf /tmp/not-run\nEOF`,
+      `git commit -F - <<'EOF'\nrm -rf /tmp/not-run\nEOF`,
+      `cat > /tmp/probe.mjs <<-EOF\n\trm -rf /tmp/not-run\n\tEOF`,
+    ];
+    for (const command of cases) {
+      expect(deletionCommandReason(command), command).toBeUndefined();
+    }
+  });
+
+  it('keeps heredoc bodies that an interpreter executes visible to the rules', () => {
+    for (const command of [
+      `python3 - <<'PY'\nimport os\nos.remove('/tmp/really-delete')\nPY`,
+      `node - <<'JS'\nrequire('node:fs').rmSync('/tmp/really-delete')\nJS`,
+      `tee /tmp/probe.mjs <<'EOF' | bash\nrm -rf /tmp/really-delete\nEOF`,
+      `cat <<'EOF' > /tmp/probe.mjs | bash\nrm -rf /tmp/really-delete\nEOF`,
+    ]) {
+      expect(deletionCommandReason(command), command).toBeDefined();
+    }
+    expect(deletionCommandFinding(`bash <<'EOF'\ngit clean -f\nEOF`)?.highRisk).toBe(true);
+  });
+
+  it('still detects a real deletion after the heredoc closes', () => {
+    const command = `cat > /tmp/probe.mjs <<'EOF'\nconst x = 1\nEOF\nrm -rf /tmp/really-delete`;
+    expect(deletionCommandReason(command)).toBeDefined();
+  });
 });
 
 describe('chief history/worktree gate', () => {
@@ -232,5 +263,51 @@ describe('read-only gate preference', () => {
     expect(
       await handler!({ toolName: 'bash', input: { command: 'git status' } }, { hasUI: false }),
     ).toBeUndefined();
+  });
+});
+
+describe('workspace sandbox deletion gate', () => {
+  function gateHandler(options: Parameters<typeof createDeletionGate>[0]) {
+    let handler:
+      | ((event: { toolName: string; input: unknown }, ctx: { hasUI: boolean }) => Promise<unknown>)
+      | undefined;
+    const pi = {
+      on: (name: string, callback: typeof handler) => {
+        if (name === 'tool_call') handler = callback;
+      },
+    } as unknown as ExtensionAPI;
+    createDeletionGate(options)(pi);
+    expect(handler).toBeDefined();
+    return (command: string) =>
+      handler!({ toolName: 'bash', input: { command } }, { hasUI: false });
+  }
+
+  it('skips an ordinary file deletion only when the workspace sandbox is active', async () => {
+    const active = gateHandler({ sandboxActive: true });
+    await expect(active('rm -rf /tmp/workspace-file')).resolves.toBeUndefined();
+    await expect(active('find build -delete')).resolves.toBeUndefined();
+
+    const inactive = gateHandler({ sandboxActive: false });
+    const refusal = await inactive('rm -rf /tmp/workspace-file');
+    expect(refusal).toMatchObject({ block: true });
+    expect(JSON.stringify(refusal)).toContain('deletes files or directories');
+  });
+
+  it('keeps high-risk Git cleanup behind the gate even when the workspace sandbox is active', async () => {
+    const active = gateHandler({ sandboxActive: true });
+    for (const command of ['git clean -f', 'git stash clear', 'git branch -D old']) {
+      const refusal = await active(command);
+      expect(refusal, command).toMatchObject({ block: true });
+    }
+    expect(deletionCommandFinding('git clean -f')?.highRisk).toBe(true);
+    expect(deletionCommandFinding('rm -rf build')?.highRisk).toBe(false);
+  });
+
+  it('keeps high-risk Git cleanup behind the gate inside an executed heredoc', async () => {
+    const active = gateHandler({ sandboxActive: true });
+    const command = `bash <<'EOF'\ngit clean -f\nEOF`;
+    const refusal = await active(command);
+    expect(refusal).toMatchObject({ block: true });
+    expect(JSON.stringify(refusal)).toContain('git clean -f deletes untracked files');
   });
 });

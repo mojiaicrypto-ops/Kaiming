@@ -64,6 +64,7 @@
 持有 `bash` 的角色默认在操作系统级文件系统沙箱中执行，策略由宿主按角色固定，模型不能修改。`KAIMING_SANDBOX=auto|strict|off` 是服务端启动环境变量，默认 `auto`；重启工作台后对全部会话生效，首版不提供前端动态切换。`auto` 与 `strict` 在找不到当前平台后端（macOS `/usr/bin/sandbox-exec`、Linux `bwrap`）或启动探针失败时都拒绝执行 `bash` 并给出原因，绝不降级为未沙箱执行；只有显式 `off` 才允许无沙箱执行，并在当前工作/会话详情中明确显示「保护已关闭」。`auto` 放行 Docker socket（运维与容器测试），`strict` 禁止；两者都保留网络与 SSH agent，唯一差异是 Docker socket。
 
 这是本机文件系统边界，不是恶意代码隔离：网络、SSH、Docker（`auto`）以及脚本对这些外部系统造成的效果不在这一层阻止；`auto` 的 Docker socket 可挂载并绕过项目只读；项目自身的 `.env` 和用户 home 下其他密钥（如 `~/.ssh`、`~/.npmrc`）不属于工作台私有存储保护范围。不可信第三方仓库应使用外部容器、VM 或独立用户。
+在 `auto|strict` 的启动探针生效且角色为设计/开发/测试（`workspace-write`）时，普通文件删除（`rm`/`rmdir`/`find -delete`/脚本删除）由 OS 沙箱限制后直接执行，不再逐次确认；`git clean -f`、`git stash drop/clear`、`git branch -D`、`off`、沙箱不可用/未生效、主管只读会话和 settler 保持确认。heredoc 写入的测试脚本正文不按命令扫描，脚本结束后的真实删除仍识别。项目工作区内未纳入 Git 的未跟踪文件仍可能被删除；用户已接受这一当前边界，不增加项目级开关或逐文件提示。
 
 | 角色 | 项目与 `.git` 写边界 | 说明 |
 |---|---|---|
@@ -102,5 +103,5 @@
 
 ## 本模块验收
 
-对应 [产品验收](../acceptance.md) AC-01～AC-05、AC-21、AC-26、AC-27、AC-37、AC-52、AC-55、AC-56、AC-57、AC-63～AC-65。
+对应 [产品验收](../acceptance.md) AC-01～AC-05、AC-21、AC-26、AC-27、AC-37、AC-52、AC-55、AC-56、AC-57、AC-63～AC-66。
 

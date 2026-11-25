@@ -854,13 +854,15 @@ export class InputRunner {
               // screenshots live under the same root. Credentials and session files stay blocked.
               readableDirs: [join(config.agentDir, 'work')],
             }),
-            // A deletion command asks the user before it runs, through the same durable interaction
-            // surface the question tool uses. Trust is session-scoped in the runner, so a Pi
-            // instance rebuild (Task type or tool-set change) does not ask again.
+            // Deletion asks by default. An active workspace-write OS sandbox bounds ordinary file
+            // deletion, so the gate skips that prompt; Git cleanup and off mode keep it. Trust is
+            // session-scoped in the runner, so a Pi instance rebuild does not ask again.
             createDeletionGate({
               isTrusted: () => this.trustedSessions.has(sessionId),
               trust: () => this.trustedSessions.add(sessionId),
               guardHistory: session.roleId === 'chief',
+              sandboxActive:
+                sandbox?.status.active === true && sandboxPolicy?.kind === 'workspace-write',
               ...(sandboxPolicy?.kind === 'read-only' && sandbox?.mode !== 'off'
                 ? { readOnlySandbox: true }
                 : {}),

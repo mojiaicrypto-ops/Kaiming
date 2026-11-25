@@ -29,10 +29,110 @@ const SEGMENT_SEPARATOR = new Set(['\n', ';', '|', '&']);
 const WRAPPERS = String.raw`(?:(?:sudo|nohup|nice|watch|command|exec|time|xargs)\s+|env\s+\S+\s+)*`;
 
 /**
- * Split a command line at unquoted separators. A `|`, `;` or `&&` inside a quoted argument is
- * data, not syntax: treating it as a separator is how a grep pattern like `'kept\|rm -rf'` used to
- * turn into a fake `rm -rf` segment.
+ * Detect a heredoc opener on one command line. Returns its delimiter and position, or undefined for
+ * a here-string and for `<<` inside quotes/comments. This is a small line scanner, not a shell
+ * parser: it exists because writing a test script through `cat > file <<'EOF'` must not be mistaken
+ * for executing the deletion calls printed inside that script.
  */
+interface HeredocOpener {
+  readonly delimiter: string;
+  readonly index: number;
+}
+
+function heredocDelimiterOnLine(line: string): HeredocOpener | undefined {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] as string;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '#' && quote === null) break;
+    if (char === '<' && line[index + 1] === '<') {
+      // `<<<` is a here-string, not a heredoc.
+      if (line[index + 2] === '<') {
+        index += 2;
+        continue;
+      }
+      let cursor = index + 2;
+      if (line[cursor] === '-') cursor += 1;
+      while (cursor < line.length && (line[cursor] === ' ' || line[cursor] === '\t')) cursor += 1;
+      if (cursor >= line.length) return undefined;
+      const delimiterQuote = line[cursor];
+      if (delimiterQuote === '"' || delimiterQuote === "'") {
+        const end = line.indexOf(delimiterQuote, cursor + 1);
+        return end < 0
+          ? undefined
+          : { delimiter: line.slice(cursor + 1, end), index };
+      }
+      let end = cursor;
+      while (end < line.length && !/[ \t;&|<>()]/.test(line[end] as string)) end += 1;
+      return end === cursor ? undefined : { delimiter: line.slice(cursor, end), index };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether the heredoc body is input data rather than code/commands. Only these writers qualify:
+ * `cat` with an output redirection (before or after the opener), `tee file`, and
+ * `git commit -F -/--file=-` (the body is a commit message). `bash <<EOF`, `python3 - <<EOF`,
+ * `node <<EOF` and every other interpreter read stdin as executable input and keep the body
+ * visible to the deletion/history rules. A pipe from the heredoc to an interpreter also keeps it.
+ */
+function heredocBodyIsData(line: string, openerIndex: number): boolean {
+  const prefix = line.slice(0, openerIndex);
+  const suffix = line.slice(openerIndex + 2);
+  const command = segmentsOf(prefix).at(-1)?.trim() ?? '';
+  if (command === '') return false;
+  const pipedToInterpreter =
+    /(?:^|[^|])\|\s*(?:(?:sudo|nohup|nice|watch|command|exec|time|xargs)\s+|env\s+\S+\s+)*(?:\S+\/)?(?:bash|sh|zsh|dash|python(?:3)?|node|bun|deno|perl|ruby|lua|php|pwsh|powershell|osascript)\b/.test(
+      suffix,
+    );
+  if (pipedToInterpreter) return false;
+  const wrapper = `(?:${WRAPPERS})`;
+  if (new RegExp(`^${wrapper}tee\\b`).test(command)) return true;
+  if (new RegExp(`^${wrapper}cat\\b`).test(command)) {
+    const beforePipe = suffix.split('|')[0] ?? suffix;
+    if (/>/.test(prefix) || />/.test(beforePipe)) return true;
+  }
+  return (
+    new RegExp(`^${wrapper}git\\s+(?:-C\\s+\\S+\\s+)?commit\\b`).test(command) &&
+    /(?:^|[ \t])(?:-F|--file)(?:[ \t]+|=)-(?=[ \t]|$)/.test(command)
+  );
+}
+
+/** Remove heredoc bodies before rule matching; the command line that starts the heredoc stays. */
+function withoutHeredocBodies(command: string): string {
+  const kept: string[] = [];
+  let delimiter: string | null = null;
+  for (const line of command.split(String.fromCharCode(10))) {
+    if (delimiter !== null) {
+      if (line.trim() === delimiter) delimiter = null;
+      continue;
+    }
+    const opener = heredocDelimiterOnLine(line);
+    if (opener !== undefined && heredocBodyIsData(line, opener.index)) {
+      delimiter = opener.delimiter;
+    }
+    kept.push(line);
+  }
+  return kept.join(String.fromCharCode(10));
+}
+
 function segmentsOf(command: string): string[] {
   const segments: string[] = [];
   let current = '';
@@ -136,6 +236,8 @@ interface DeletionRule {
   readonly match: (segment: string) => boolean;
   /** How the rule is described to the user and, on refusal, to the model. */
   readonly label: string;
+  /** Git cleanup keeps its confirmation even when the OS sandbox already bounds the workspace. */
+  readonly highRisk?: true;
 }
 
 const RULES: readonly DeletionRule[] = [
@@ -156,18 +258,21 @@ const RULES: readonly DeletionRule[] = [
       atCommandStart(s, String.raw`git\s+(?:-C\s+\S+\s+)?clean\b`) &&
       /(^|\s)(?:--force\b|-[a-zA-Z]*f)/.test(s),
     label: 'git clean -f deletes untracked files',
+    highRisk: true,
   },
   // Dropping or clearing a stash deletes saved changes; `git stash` / `pop` do not.
   {
     match: (s) =>
       atCommandStart(s, String.raw`git\s+(?:-C\s+\S+\s+)?stash\b`) && /\s(drop|clear)\b/.test(s),
     label: 'drops stashed changes',
+    highRisk: true,
   },
   // -D force-deletes an unmerged branch; lowercase -d refuses unmerged work and stays quiet.
   {
     match: (s) =>
       atCommandStart(s, String.raw`git\s+(?:-C\s+\S+\s+)?branch\b`) && /(^|\s)-D\b/.test(s),
     label: 'git branch -D force-deletes a branch',
+    highRisk: true,
   },
   // Scripted deletion through an interpreter is the same act with another spelling. The Sync
   // suffices alone (it is not an English word); bare fs./os. calls keep their prefix so ordinary
@@ -232,29 +337,43 @@ export interface DeletionRuleOptions {
   readonly guardHistory?: boolean;
 }
 
+export interface DeletionCommandFinding {
+  readonly reason: string;
+  readonly highRisk: boolean;
+}
+
 /**
  * Why a command asks for approval, or `undefined` when it does not. Exported so the rule table can
  * be tested without a running session. The default table is unchanged for every other role.
+ * Writer heredoc bodies are excluded first: writing a script through `cat > file <<'EOF'` is not
+ * running the deletion calls printed inside that script; executable heredocs keep their body.
  */
-export function deletionCommandReason(
+export function deletionCommandFinding(
   command: string,
   options: DeletionRuleOptions = {},
-): string | undefined {
+): DeletionCommandFinding | undefined {
   const rules = options.guardHistory === true ? [...RULES, ...HISTORY_RULES] : RULES;
-  for (const segment of segmentsOf(command)) {
+  for (const segment of segmentsOf(withoutHeredocBodies(command))) {
     if (segment.trim() === '') continue;
     for (const rule of rules) {
       if (rule.match(segment)) {
-        return rule.label;
+        return { reason: rule.label, highRisk: rule.highRisk === true };
       }
     }
   }
   return undefined;
 }
 
+export function deletionCommandReason(
+  command: string,
+  options: DeletionRuleOptions = {},
+): string | undefined {
+  return deletionCommandFinding(command, options)?.reason;
+}
+
 /** Why a command is a chief history action, independent of the deletion table. */
 export function historyCommandReason(command: string): string | undefined {
-  for (const segment of segmentsOf(command)) {
+  for (const segment of segmentsOf(withoutHeredocBodies(command))) {
     if (segment.trim() === '') continue;
     for (const rule of HISTORY_RULES) {
       if (rule.match(segment)) return rule.label;
@@ -276,6 +395,11 @@ export interface DeletionGateOptions {
   readonly guardHistory?: boolean;
   /** The chief is in an active read-only sandbox: history commands are refused, never prompted. */
   readonly readOnlySandbox?: boolean;
+  /**
+   * The role has an active workspace-write OS sandbox. Ordinary file deletion is already bounded by
+   * the kernel, so it runs without a confirmation; Git cleanup keeps its prompt.
+   */
+  readonly sandboxActive?: boolean;
 }
 
 /**
@@ -283,8 +407,8 @@ export interface DeletionGateOptions {
  * bound UI adapter, so it is durable (the interaction is in the store before the wait begins),
  * visible wherever the session's questions already appear, and the run counts as waiting rather than
  * stalled. A refusal blocks the call as a tool result the model can act on; an approval runs the
- * command exactly as issued. Choosing `TRUST_SESSION` is an explicit, session-local bypass for
- * repeated test runs: every later shell call, including deletions, runs without a question.
+ * command exactly as issued. Choosing `TRUST_SESSION` is an explicit, session-local bypass: every
+ * later shell call, including deletions, runs without a question.
  */
 export function createDeletionGate(options: DeletionGateOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
@@ -294,20 +418,30 @@ export function createDeletionGate(options: DeletionGateOptions = {}): Extension
       const input = event.input as { command?: string };
       const command = input['command'];
       if (typeof command !== 'string' || command === '') return undefined;
-      if (options.readOnlySandbox === true) {
-        const history = historyCommandReason(command);
-        if (history !== undefined) {
-          return {
-            block: true,
-            reason:
-              `the chief read-only sandbox cannot run this history command (${history}); ` +
-              'the settlement commit belongs to the settler',
-          };
-        }
+      const history =
+        options.guardHistory === true || options.readOnlySandbox === true
+          ? historyCommandReason(command)
+          : undefined;
+      if (options.readOnlySandbox === true && history !== undefined) {
+        return {
+          block: true,
+          reason:
+            `the chief read-only sandbox cannot run this history command (${history}); ` +
+            'the settlement commit belongs to the settler',
+        };
       }
       if (trustAll || options.isTrusted?.() === true) return undefined;
-      const reason = deletionCommandReason(command, { guardHistory: options.guardHistory === true });
-      if (reason === undefined) return undefined;
+      const deletion = deletionCommandFinding(command);
+      const reasons: string[] = [];
+      if (
+        deletion !== undefined &&
+        !(options.sandboxActive === true && deletion.highRisk !== true)
+      ) {
+        reasons.push(deletion.reason);
+      }
+      if (history !== undefined) reasons.push(history);
+      if (reasons.length === 0) return undefined;
+      const reason = reasons.join('; ');
       if (!ctx.hasUI) {
         return {
           block: true,

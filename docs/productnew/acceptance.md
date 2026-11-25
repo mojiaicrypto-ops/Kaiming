@@ -77,6 +77,7 @@
 | AC-63 | 在有沙箱后端的机器上，用 read/grep 与 bash 的 `cat`、`node`、符号链接读取工作台数据目录的 `models.json`、`state.db`；再用 `..` 与符号链接写项目外路径 | 私有数据全部被拒；`agentDir/work` 可读；子进程 `env` 不含访问口令、`PI_SESSION_FILE`、provider key，`PATH`/`HOME` 等工具链变量保留；工作台自身 `.env` 即使位于被接入项目也读不到；项目自身 `.env` 不误伤 | P-05 |
 | AC-64 | 主管执行 `touch`/`sed -i`/`git commit`；设计、开发、测试执行 `git commit` 与写 `.git/hooks`；结算执行 `git add`/`commit`；测试写 `dist`/`coverage`；再选择 `Trust all commands in this session` 后重复一次写尝试 | 主管项目写被拒，`git status`、`ssh`、`docker`、`lsof`、日志可用；设计/开发/测试可写项目文件，但 commit 与 hooks 被拒；结算提交成功、hooks 写被拒；测试构建产物可写；拒绝是真实错误并说明原因，不弹提权窗；`Trust all` 后写仍被拒 | P-05、G1 |
 | AC-65 | 分别以 `auto`、`strict`、`off` 启动；在缺少后端或探针失败的机器上运行 `auto` 与 `strict`；在 `auto` 运行 `docker ps` 与 `ssh` 到已配置主机，在 `strict` 再运行 `docker ps`；重启后查看当前工作/会话详情 | `auto`/`strict` 无后端或探针失败都拒绝 `bash` 并显示原因，不裸奔；只有 `off` 允许无沙箱执行并显示「保护已关闭」；`auto` 允许 Docker socket，`strict` 拒绝，两者网络与 SSH 可用；模式在服务端启动时读取、重启后对全部会话生效，首版无前端动态切换；不可信仓库提示使用容器/VM | P-05 |
+| AC-66 | 在 `auto`/`strict` 探针生效时，设计/开发/测试执行普通文件删除、写一份正文含 `rmSync` 的 heredoc 测试脚本、执行 `git clean -f`；另以 `off` 启动重复普通删除 | 普通删除和写下脚本不创建确认且实际执行；`git clean -f` 仍确认；`off` 的普通删除仍确认；OS 沙箱与角色写边界保持；不能把未跟踪文件保护说成已实现 | P-05、G1 |
 
 ## 整体交付检查
 
