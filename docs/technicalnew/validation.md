@@ -234,3 +234,10 @@
 - **提示词/工具**：developer v10 限制 UI 冒烟为一条核心入口、最多 1–2 张截图、临时 HTTP 服务，禁止手写 CDP/Electron 框架；chief v14 增加内容页建 Plan 前的受众/主张/禁用术语对齐、方向成立直接进 Review、重载上下文另开 developer Session。`browser(open)` 拒绝 `file:` 时提示临时 loopback HTTP 服务。
 - **证据**：`test/history-image-archive.test.ts` 10/10（当前批次保留、成功 assistant 消费后归档、并行工具结果、user 图片负向对照、错误/中止 assistant 不归档、幂等、前缀稳定、新工具批次不改旧前缀、无图/实际归档不原地修改、context handler 注册）；`test/browser-tool.test.ts` 7/7（`file:` 大小写拒绝提示）；全量 74 文件 768/768；`tsc` 通过；`check:prompts` 15/15。占位符固定且只影响尾部批次；测试断言 user 图片不被改写、无图/归档路径不修改输入、已归档重复处理无变化。独立 Review PASS（未发现阻断项；非阻断建议已处理大小写 file 提示、实际归档不变异、原始工具文本保留、新工具批次前缀稳定、error/aborted 不归档）。
 - **边界**：当前生产进程仍运行旧代码；提示词按进程缓存，扩展只对新创建/重建的 Pi 实例生效，必须等工作台重启。真实延迟/缓存对比基准尚未在重启后的副本会话执行，不能宣称已达到 5–10s 或 98%+ 新命中率；待当前 `t-7adcab264a9c` 收口后执行。旧 user 图片保留会增加少量上下文，作为用户证据与缓存稳定性取舍。
+
+### 2026-11-27 · 委派等待的模型阻断与停止响应
+
+- **问题**：prepdex 项目把 `developer` 指向不可用模型后，`task(op=dispatch)` 的子成员输入保持 `queued`；`settleStep` 只看到 `queued`，主管等到 `waitTimeoutMs`，而不是得到 `MODEL_UNAVAILABLE`。用户在 16:08:30 停止主管后，主管输入仍是 `processing`，stop RPC 直到 16:13:34 子成员完成才 committed（约 5 分钟）；根因是轮询没有检查当前主管输入的 `stopRequestKey`。
+- **实现**：`runner.settleStep` 轮询当前成员 input；对仍为 `queued` 的成员按 Task 的 role/project 解析有效配置并查询 `PiRuntimeFactory.isAvailable`，不可用时返回 `blocked` 且在该成员 `error` 写入 `MODEL_UNAVAILABLE`，不修改 queued 输入；每条轮询先检查当前主管 live input 的 `stopRequestKey`，命中立即返回 `stopped`。`DelegationReturn.outcome` 增加 `stopped`；不新增 Store schema，不把成员改成 failed/blocked 终态，配置修复后 worker 仍可继续。
+- **证据**：`test/runtime.test.ts` 67/67 通过（新增 3 个用例：不可用成员模型立即 `t-blocked blocked` 且成员仍 queued；主管等待中 stop 在 2s 内返回 `t-stop stopped`、主管输入 stopped、成员仍 queued；可用 queued 成员返回 timeout 且无 `MODEL_UNAVAILABLE`）；`npm run typecheck` 通过。独立 Test 在反转两处源码的临时副本上观察对应用例分别以 5204ms > 2s、19811ms > 2s 失败，证明测试有区分力；独立 Review PASS，唯一非阻断的 outcome 断言缺口已补。验证档 `focused`，只运行 `test/runtime.test.ts`；未跑全量套件或 E2E。
+- **边界**：当前运行中的 workbench 尚未重启，本修复只对重启后的代码生效；没有改变工作台 UI 对子会话 blocked 事件的呈现，主管当前回合通过 `task(op=dispatch)` 的结构化结果获得原因；超时后主管不再等待但未被唤醒的边界未在本任务扩展。

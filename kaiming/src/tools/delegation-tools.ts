@@ -176,7 +176,7 @@ export interface MemberState {
 
 export interface DelegationReturn {
   readonly taskId: string;
-  readonly outcome: 'completed' | 'blocked' | 'timeout';
+  readonly outcome: 'completed' | 'blocked' | 'timeout' | 'stopped';
   readonly sessions: readonly MemberState[];
 }
 

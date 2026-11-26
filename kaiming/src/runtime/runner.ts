@@ -1281,6 +1281,32 @@ export class InputRunner {
           .listTaskSessions(taskId)
           .filter((member) => task.currentSessionIds.includes(member.sessionId));
         const sessions = members.map((member) => this.memberState(member.currentInputId));
+        // The chief's own input owns this wait. A stop request must break the poll immediately;
+        // otherwise requestStop waits for the member (and the drag can outlive the user's click).
+        const liveInputId = this.liveRuns.get(sessionId)?.inputId;
+        if (liveInputId !== undefined) {
+          const live = this.options.store.getInput(liveInputId);
+          if (live !== undefined && live.stopRequestKey !== null) {
+            return { taskId, outcome: 'stopped', sessions };
+          }
+        }
+        // A queued member whose model is unavailable is not ordinary pending work. Report the
+        // reason to the chief without changing the input: fixing the model can still resume it.
+        const unavailable = await this.unavailableMember(members, task.projectId);
+        if (unavailable !== undefined) {
+          return {
+            taskId,
+            outcome: 'blocked',
+            sessions: sessions.map((member) =>
+              member.sessionId === unavailable.sessionId
+                ? {
+                    ...member,
+                    error: { code: 'MODEL_UNAVAILABLE', message: unavailable.detail },
+                  }
+                : member,
+            ),
+          };
+        }
         const unfinished = sessions.filter(
           (member) =>
             member.state === 'queued' ||
@@ -1304,6 +1330,42 @@ export class InputRunner {
       if (remaining <= 0) this.hostWaits.delete(waitKey);
       else this.hostWaits.set(waitKey, remaining);
     }
+  }
+
+  /** A queued member that cannot start because its effective model is unavailable. */
+  private async unavailableMember(
+    members: readonly { readonly sessionId: string; readonly roleId: string; readonly currentInputId: string | null }[],
+    projectId: string,
+  ): Promise<{ readonly sessionId: string; readonly detail: string } | undefined> {
+    for (const member of members) {
+      const input = member.currentInputId === null ? undefined : this.options.store.getInput(member.currentInputId);
+      if (input?.status !== 'queued') continue;
+      let selection: EffectiveConfig['selection'];
+      try {
+        selection = this.options.resolveConfig(member.roleId, projectId).selection;
+      } catch (error) {
+        return {
+          sessionId: member.sessionId,
+          detail: `configuration could not be resolved: ${errorMessageOf(error)}`,
+        };
+      }
+      let available = false;
+      try {
+        available = await this.options.factory.isAvailable(selection);
+      } catch (error) {
+        return {
+          sessionId: member.sessionId,
+          detail: `availability check failed: ${errorMessageOf(error)}`,
+        };
+      }
+      if (!available) {
+        return {
+          sessionId: member.sessionId,
+          detail: `${selection.providerId}/${selection.modelId} is unavailable`,
+        };
+      }
+    }
+    return undefined;
   }
 
   private memberState(inputId: string | null): MemberState {

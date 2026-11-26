@@ -122,6 +122,7 @@ dispatch(sessionId):
 - 当前用户消息先保存；只在 Pi 空闲时投递。首版不用 Pi steer/followUp 作第二条输入队列，不重复入两队。
 - 一个主管同时协调一项未结束 Task；当前 Task 的交互、补充与恢复可处理，其他目标用另一个主管。查询/交互响应/停止/恢复直接进入对应服务；主管自身 interrupted 不能启动普通队列。
 - `waiting_user` 的原生交互等待与委派等待（`settleStep`）都不计入运行停滞/总时长窗口：用户思考、成员施工都不是该 run 自己的工作量。委派等待的时间属于成员运行，成员各有看门狗；主管自己的模型生成仍计入。主管自身输入被停滞或超时中止时，宿主关闭为 stopped、在 recovery 记录 `host:*` 证据并注入系统提示说明结果未知，队列随后继续；不重投原输入，也不要求用户在界面另行恢复。
+- 委派等待轮询当前成员时，若成员仍是 queued 且有效模型不可用，`settleStep` 立即返回 `blocked`（`MODEL_UNAVAILABLE`），不修改子输入；配置恢复后 worker 仍可认领同一 queued 输入。主管输入的 `stopRequestKey` 写入后，等待在本轮轮询周期内返回 `stopped`，不再等子成员或 timeout。
 - 成员报告的重试由结构预算终止，不按内容形态检测：`agent_report` 连续 5 次错误结果（schema 校验、provider 截断拒绝、宿主超限拦截、工具报错均计入）触发一次隐藏纠正并把连击清零；纠正后再连续 5 次失败以 `failed`/`REPORT_RETRY_EXHAUSTED` 终止（总预算 10 次失败 + 1 次纠正）。只有 `agent_report` 自己的成功清零连击，其他工具的成功不清零；计数按输入起算。guidance 对该终态建议派新会话，不自动续办原会话。
 - 流式工具参数超过 1MB 硬上限即中止当前轮，被丢弃的畸形 assistant 消息进入持久历史前替换为短诊断；超过 `agent_report` 16KB 参数上限的调用被拦截执行，其错误结果同样计入重试预算。运行时**不解析、不修复** provider 原生 XML/DSML 工具调用，**不做按内容形态的退化检测**（形态空间无界，逐 delta 内容分析本身是 CPU 隐患）；不支持该格式即失败关闭。成功调用非结果工具的无限探索循环不在预算覆盖内，由运行 watchdog 兜底（[R7](gap-register.md#r-风险未记通过)）。
 - 专业成员的输入分两层：`task_sessions.instructions` 只存主管原话（界面展示），真正投递给 Pi 的 payload 带宿主信封——Task 身份与目标、当前范围核对、writeScope/引用、Review/Test/Settle 阶段的最新上游报告，以及 `agent_report` 收尾契约（review/test 需 verdict）；新建成员另带计划路径与验收摘要。续办携带除计划路径与验收摘要外的同一信封。成员因此不必先花回合 `task(op=get)` 或读 Plan。

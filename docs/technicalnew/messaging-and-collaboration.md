@@ -69,7 +69,7 @@ Review verdict=failed 可以是工作正常结束的报告，主管必须判断�
 ```typescript
 type DelegationReturn = {
   taskId: string;
-  outcome: 'completed' | 'blocked' | 'timeout';
+  outcome: 'completed' | 'blocked' | 'timeout' | 'stopped';
   sessions: Array<{
     sessionId: string; inputId: string;
     state: 'queued' | 'working' | 'waiting_user' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted';
@@ -85,7 +85,8 @@ type DelegationReturn = {
 | 全部成员停稳，期待报告齐全，无 blocked/中断/停止/执行异常 | completed，包含所有报告；verdict=failed 仍由主管判断 |
 | 全部成员结束，但有正式 blocked、缺报告、失败/停止/中断 | blocked，汇总已有报告及每项真实异常；不丢成功成员 |
 | waitTimeoutMs 到达、仍有未结束成员 | timeout，全部成员当前状态、已有报告及交互；不停止/取消/重建子工作 |
-| 父输入停止或 Task 控制 | 解除父观察等待，按控制事实返回 blocked 或取消；Task/子停止范围见 S5 |
+| 当前成员 queued，但其有效模型配置不可用 | blocked，成员 `error.code=MODEL_UNAVAILABLE`；子输入保留 queued，修复配置后 worker 继续 |
+| 父输入停止或 Task 控制 | 解除父观察等待，按控制事实返回 stopped/blocked 或取消；Task/子停止范围见 S5 |
 
 报告和输入收尾提交后唤醒，注册等待后重查事实，周期扫描兜底；不把内存 Promise 当状态源。read/write 共用同一等待算法。create/continue 保存身份后等待，wait 只观察已存在工作。旧回执不可变，新 wait 可取最新快照。
 

@@ -64,6 +64,8 @@ async function harness(options: {
   tools?: readonly string[];
   modelIds?: readonly string[];
   model?: RuntimeDefaults['model'];
+  /** Per-role model used to exercise a member whose own model is unavailable. */
+  modelForRole?: (roleId: string) => RuntimeDefaults['model'] | undefined;
   /** The stub models declare reasoning, and the role runs at this Pi thinking level. */
   reasoning?: boolean;
   level?: ThinkingLevel;
@@ -114,6 +116,8 @@ async function harness(options: {
   };
   const factory = new PiRuntimeFactory(defaults);
   const registry = new SessionRegistry(factory);
+  const modelForRole = (roleId: string): RuntimeDefaults['model'] =>
+    options.modelForRole?.(roleId) ?? defaults.model;
   const runner = new InputRunner({
     store,
     registry,
@@ -121,11 +125,11 @@ async function harness(options: {
     resolveConfig: (roleId) =>
       resolveEffectiveConfig({
         roleId,
-        server: defaults,
+        server: { ...defaults, model: modelForRole(roleId) },
         // A level is stored on the same row as a model, so the harness states both or neither.
         ...(options.level !== undefined
           ? {
-              roleOverrides: { [roleId]: defaults.model },
+              roleOverrides: { [roleId]: modelForRole(roleId) },
               roleLevels: { [roleId]: options.level },
             }
           : {}),
@@ -2580,6 +2584,207 @@ describe('input runner', () => {
     expect(h.store.getInput('i-1')?.status).toBe('queued');
     expect(h.registry.count()).toBe(0);
   });
+
+  it('reports an unavailable member model to the chief instead of waiting out dispatch', async () => {
+    const events: unknown[] = [];
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({
+                op: 'dispatch',
+                waitTimeoutMs: 5_000,
+                sessions: [
+                  {
+                    roleId: 'developer',
+                    instructions: 'implement it',
+                    writeScope: ['src/**'],
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'blocked observed' },
+      ],
+      acceptInput: false,
+      modelForRole: (roleId) =>
+        roleId === 'developer' ? { providerId: 'missing-provider', modelId: 'nope' } : undefined,
+      onEvent: (_sessionId, event) => events.push(event),
+    });
+    const task = h.store.createTask({
+      id: 't-blocked',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      workKind: 'implement',
+      initialPhase: 'develop',
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    accept(h.store, 'i-1', 'req-1', task.id);
+
+    const started = Date.now();
+    const outcome = await h.runner.runNext('s-1');
+    const elapsed = Date.now() - started;
+    const member = h.store.listTaskSessions(task.id)[0];
+
+    expect(outcome.kind).toBe('completed');
+    expect(elapsed).toBeLessThan(2_000);
+    expect(member).toBeDefined();
+    expect(h.store.getInput(member?.currentInputId ?? '')?.status).toBe('queued');
+    expect(JSON.stringify(events)).toContain('t-blocked blocked');
+    expect(JSON.stringify(events)).toContain('MODEL_UNAVAILABLE');
+  }, 30_000);
+
+  it('breaks a chief dispatch wait when the chief input is stopped', async () => {
+    const events: unknown[] = [];
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({ op: 'dispatch', waitTimeoutMs: 20_000 }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'unused after stop' },
+      ],
+      acceptInput: false,
+      onEvent: (_sessionId, event) => events.push(event),
+    });
+    const task = h.store.createTask({
+      id: 't-stop',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      workKind: 'implement',
+      initialPhase: 'develop',
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-dev',
+          taskId: task.id,
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'dev',
+          instructions: 'wait for the test to stop the chief',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/**'],
+          inputId: 'i-dev',
+          inputPayload: { content: [{ type: 'text', text: 'wait' }] },
+        },
+      ],
+    });
+    accept(h.store, 'i-1', 'req-1', task.id);
+
+    const running = h.runner.runNext('s-1');
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const stopStarted = Date.now();
+    const stop = await h.runner.requestStop('s-1', {
+      inputId: 'i-1',
+      requestKey: 'stop-1',
+      reason: 'user',
+    });
+    const stopElapsed = Date.now() - stopStarted;
+    const outcome = await running;
+
+    expect(outcome.kind).toBe('stopped');
+    expect(stopElapsed).toBeLessThan(2_000);
+    expect(stop.stopRequested).toBe(true);
+    expect(h.store.getInput('i-1')?.status).toBe('stopped');
+    expect(JSON.stringify(events)).toContain('t-stop stopped');
+    expect(h.store.getInput('i-dev')?.status).toBe('queued');
+  }, 30_000);
+
+  it('keeps waiting for an available queued member instead of reporting MODEL_UNAVAILABLE', async () => {
+    const events: unknown[] = [];
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({ op: 'dispatch', waitTimeoutMs: 1_000 }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'timeout snapshot' },
+      ],
+      acceptInput: false,
+      onEvent: (_sessionId, event) => events.push(event),
+    });
+    const task = h.store.createTask({
+      id: 't-available',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      workKind: 'implement',
+      initialPhase: 'develop',
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-available',
+          taskId: task.id,
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'dev',
+          instructions: 'stay queued for the timeout snapshot',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/**'],
+          inputId: 'i-available',
+          inputPayload: { content: [{ type: 'text', text: 'wait' }] },
+        },
+      ],
+    });
+    accept(h.store, 'i-1', 'req-1', task.id);
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    expect(JSON.stringify(events)).toContain('t-available timeout');
+    expect(JSON.stringify(events)).not.toContain('MODEL_UNAVAILABLE');
+    expect(h.store.getInput('i-available')?.status).toBe('queued');
+  }, 30_000);
 
   it('reports a session awaiting recovery instead of running past it', async () => {
     const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
