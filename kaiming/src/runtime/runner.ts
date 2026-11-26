@@ -46,6 +46,7 @@ import {
   REPORT_MISSING_RECOVERY_CUSTOM_TYPE,
   createModelOutputGuardExtension,
 } from './model-output-guard.ts';
+import { createHistoryImageArchiveExtension } from './history-image-archive.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
@@ -831,6 +832,7 @@ export class InputRunner {
           // Always installed: the model's file tools stay inside the project (and never reach the
           // server's private storage); shell commands keep their own deletion gate.
           extensionFactories: [
+            createHistoryImageArchiveExtension(),
             createModelOutputGuardExtension(() => this.activeOutputGuards.get(sessionId)),
             createRawQuestionRecovery({
               bridge: this.interactions,

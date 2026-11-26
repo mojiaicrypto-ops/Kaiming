@@ -269,7 +269,14 @@ export function createBrowserTool(options: BrowserToolOptions): DomainTool {
           const requested = readString(params, 'url') ?? 'about:blank';
           const url = navigableUrl(requested);
           if (url === undefined) {
-            return fail('INVALID_ARGUMENT', 'open accepts http, https, data or about URLs only', { action, url: requested });
+            const localFileHint = requested.trim().toLowerCase().startsWith('file:')
+              ? '; for a local HTML file, serve it from a temporary loopback HTTP server (for example "python3 -m http.server 0 --bind 127.0.0.1") and open the http://127.0.0.1:<port>/ URL'
+              : '';
+            return fail(
+              'INVALID_ARGUMENT',
+              `open accepts http, https, data or about URLs only${localFileHint}`,
+              { action, url: requested },
+            );
           }
           await handle.page.goto(url, { waitUntil: 'load', timeout: ACTION_TIMEOUT_MS });
           armIdleClose(options.sessionId);

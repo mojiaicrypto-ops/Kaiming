@@ -226,3 +226,11 @@
 - **实现**：`chief.md` 增补并行决策、一次 dispatch、共享文件、合流构建归属和同类机械任务合并规则，以及非阻塞不返工边界；`reviewer.md` 增加 passed/failed 边界（只缺 Test 可执行的证据时列 `not_run`，不由只读 Reviewer 判 failed）；`tester.md` 增加复现即止损，不修生产代码/不钻依赖；`developer.md` 增加优先 `edit`/`write` 和可见 UI 必须跑一次真实入口。未新增状态、调度层或 OS 写锁。
 - **证据**：`check:prompts` 15/15；全量 73 文件 758/758；`tsc` 通过；改动内容与 D-03/D-05 的职责边界一致。`writeScope` 仍然是告警而非写锁，并行安全依赖 Plan 的精确切分。
 - **边界**：提示词缓存需重启工作台后生效；尚未用真实模型在 B-44～B-47 上验证“主动并行”，也未验证两个 Tester 的并发 Electron/浏览器环境；若实际仍越界，再考虑在 tool-guard 对 write/edit 做 writeScope 拦截。
+
+### 2026-11-26 · 历史图片归档与 UI 自检边界
+
+- **问题**：37 张历史截图约 7.79MB base64；每张约 957 tokens，但同一模型 7–8 图已需 43–74s、37 图需 184–205s，纯文本 168K/0 图仅约 3.6s；按 K=8 滑动窗口仍达不到目标，并会从中段改写前缀、反复击穿 Prefix Cache。压缩本身仍按 `thresholdPercent × contextWindow`，没有固定上限。
+- **实现**：新增 `history-image-archive.ts`，以 Pi `context` 事件在每次 LLM 调用前归档 tool-result 图片：user 图片永不改写；只有位于最后一条成功 assistant 消息之后的当前工具批次保留，更早的 tool-result 图片替换为固定文本占位符；错误/中止的 assistant 不算成功回复。归档不修改 Pi JSONL、数据库或附件；占位符不含时间戳/计数/动态 ID，重复执行幂等。`runner` 为每个 Pi 实例安装该扩展。该扩展不改 compaction policy，也不处理 tool-set resume bug。
+- **提示词/工具**：developer v10 限制 UI 冒烟为一条核心入口、最多 1–2 张截图、临时 HTTP 服务，禁止手写 CDP/Electron 框架；chief v14 增加内容页建 Plan 前的受众/主张/禁用术语对齐、方向成立直接进 Review、重载上下文另开 developer Session。`browser(open)` 拒绝 `file:` 时提示临时 loopback HTTP 服务。
+- **证据**：`test/history-image-archive.test.ts` 10/10（当前批次保留、成功 assistant 消费后归档、并行工具结果、user 图片负向对照、错误/中止 assistant 不归档、幂等、前缀稳定、新工具批次不改旧前缀、无图/实际归档不原地修改、context handler 注册）；`test/browser-tool.test.ts` 7/7（`file:` 大小写拒绝提示）；全量 74 文件 768/768；`tsc` 通过；`check:prompts` 15/15。占位符固定且只影响尾部批次；测试断言 user 图片不被改写、无图/归档路径不修改输入、已归档重复处理无变化。独立 Review PASS（未发现阻断项；非阻断建议已处理大小写 file 提示、实际归档不变异、原始工具文本保留、新工具批次前缀稳定、error/aborted 不归档）。
+- **边界**：当前生产进程仍运行旧代码；提示词按进程缓存，扩展只对新创建/重建的 Pi 实例生效，必须等工作台重启。真实延迟/缓存对比基准尚未在重启后的副本会话执行，不能宣称已达到 5–10s 或 98%+ 新命中率；待当前 `t-7adcab264a9c` 收口后执行。旧 user 图片保留会增加少量上下文，作为用户证据与缓存稳定性取舍。

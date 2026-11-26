@@ -201,6 +201,9 @@ describe('browser tool', () => {
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('INVALID_ARGUMENT');
     expect(fake.calls.some((call) => call.startsWith('goto '))).toBe(false);
+    expect(textOf(refused)).toContain('python3 -m http.server 0');
+    const upper = await browser.execute('c2', { action: 'open', url: 'FILE:///etc/passwd' });
+    expect(textOf(upper)).toContain('python3 -m http.server 0');
     // data: and about: stay available: that is how a page is inspected without a server.
     expect((await browser.execute('c2', { action: 'open', url: 'about:blank' })).isError).toBe(false);
     expect(fake.calls).toContain('goto about:blank');

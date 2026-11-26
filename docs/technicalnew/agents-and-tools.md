@@ -150,6 +150,8 @@ chief 的 op=initialize，输入 files[{path,content}]、reusedAuthorityRefs、r
 
 主管会话可带图片：`POST /api/v1/uploads`（cookie + CSRF，原始字节，png/jpeg/webp/gif，单张 ≤8MB）→ 内容寻址存储 `<agentDir>/attachments/<sha256[:32]>`；`session.input.submit` 的 content 接受 `{type:'image', attachmentId}`（单条 ≤6 张），payload 只存引用；runner 在投递时读盘转 base64 交给 Pi 的 `prompt(text,{images})`。history / 实时快照 / 实时事件统一把 image 块投影成 `{type:'image', id, mimeType}`，浏览器经 `GET /api/v1/attachments/<id>` 取字节——**base64 永不进入浏览器响应**。自定义 OpenAI 兼容 provider 写入 `models.json` 时声明 `input:["text","image"]`，否则 Pi 会静默丢弃图片。
 
+**历史图片归档（上下文）**：Pi 原生历史仍保存图片字节；每次 LLM 调用前，`context` 扩展只把已被后续成功 assistant 消息消费的 tool-result 图片替换为固定文本占位符，保留尚未被回复消费的最近工具批次图片；user 图片不改写。错误/中止的 assistant 不触发归档。占位符不含时间戳、计数或动态 ID，已归档块不再变化，因此只影响尾部消费批次的缓存前缀，原始 `.jsonl` 与附件存储不变。归档是请求级变换，Pi 自身的 tokens/percent 估算仍基于原始会话投影；压缩仍按用户的 `thresholdPercent` 与当前模型 `contextWindow`，不新增固定 token 上限。
+
 ## G3 Task 流程、交付核对与完成
 
 Task 仅主管总体 Plan；子 Agent 可自行计划或直接完成目标，不强制文件/审批。Review 依据 Plan 的验收与它引用的规格、Plan 的「范围」、实际交付与证据，不能以作者内部计划代替验收；代码 Task 没有声明范围，或者验收明显按实现结果写成，都是阻断项。程序把实际改动与声明范围的差集列为越界文件，判断仍由 Review 负责。

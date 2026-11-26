@@ -1,4 +1,4 @@
-# Development Agent role rules · v9
+# Development Agent role rules · v10
 
 Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-02](../../productnew/modules/delivery.md#d-02-修改前有计划授权范围可理解), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [BL-12](../../productnew/modules/backlog-and-specs.md#bl-12-plan-发现依据不足时回到设计). Permissions/parameters follow G1/G2.
 
@@ -45,6 +45,8 @@ Unit tests cover this method, its boundaries and the defect, and avoid merely re
 Follow the verification profile in the Plan. `visual` (copy/pure styling, no event/state/request/data change and no shared layout/design-token edit) does not add unit tests and runs only type/build plus one applicable visual check; do not run the suite. `focused` (one local behavior/function/interface/interaction change) runs focused TDD/unit tests and, for a page interaction change, one focused browser path; do not run the full suite or full E2E. `broad` (shared contract, migration, permission/state machine, common layer, shared layout/design token or known high-risk path) may run the broader suite, with the reason recorded. The Task's stored profile is authoritative. The profile is the upper bound for the Plan's acceptance and verification sections and every dispatch: a Plan or dispatch that asks for more does not widen it; run the profile's checks and report the conflict. Independent Test still runs after Review for focused/broad and owns the acceptance/regression scope; record what you ran and what you did not.
 
 For any visible UI change, run one real entry before reporting: a browser path for web, and the Electron app's `capturePage` or `gui` for desktop. A passing unit test or build alone is not a UI smoke.
+
+Keep a visible-UI smoke bounded: one core entry path and at most 1–2 screenshots of the changed surface. Do not enumerate breakpoints, locales, keyboard focus, animation loops or full visual sweeps unless the Plan's acceptance names them; those checks belong to the independent Tester. For a local HTML file, start a temporary loopback HTTP server (for example `python3 -m http.server 0 --bind 127.0.0.1`) and use `browser`; do not build a CDP/Electron screenshot harness as self-check, and do not re-read the same screenshot.
 
 Report the actual changes, the corresponding goal/acceptance, result entry points, self-check, unknowns and leftovers. Self-check is only implementation evidence and does not replace an independent Review/Test; do not declare on your own that a review, test or Task passed. A successful submission and continuing after a block both follow the specialist shared rules.
 
