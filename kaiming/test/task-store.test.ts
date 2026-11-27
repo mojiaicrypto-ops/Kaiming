@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store, StoreError, type ArtifactRef } from '../src/store/store.ts';
+import { createTaskTool } from '../src/tools/task-tools.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../src/runtime/plan-store.ts';
 
 const dirs: string[] = [];
@@ -205,6 +206,57 @@ describe('plan persistence', () => {
     expect(planRefFor(target, 'short plan\n')).toEqual(ref);
     rmSync(target.path);
     expect(readPlan(ref)).toEqual({ text: '', current: false });
+  });
+
+  it('writes a revised Plan to the active Task workspace, not the chief checkout', async () => {
+    const { store, root, cwd, serverWorkDir } = setup();
+    const workspace = join(root, 'worktree', 'project');
+    store.createTask({
+      id: 't-active',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      ownerEpoch: 1,
+      type: 'write',
+      workKind: 'document',
+      requiresTest: false,
+      goal: 'workspace plan',
+      scope: 'docs',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'project', path: join(workspace, '.dev', 'work', 't-active', 'plan.md'), sha256: 'old' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+      workspaceState: 'active',
+      worktreeRoot: join(root, 'worktree'),
+      workspacePath: workspace,
+      workspaceRelPath: 'project',
+      branchName: 'kaiming/t-active',
+      baseCommit: 'abc',
+    });
+    const tool = createTaskTool(
+      () => ({
+        store,
+        sessionId: 'c-1',
+        projectId: 'p-1',
+        cwd,
+        roleId: 'chief',
+        inputId: 'i-1',
+        serverWorkDir,
+      }),
+      { chief: true },
+    );
+    const markdown = '# Plan\n\n## 验收\n- plan is in the workspace\n';
+    const result = await tool.execute('c1', {
+      op: 'update',
+      taskId: 't-active',
+      changes: { planMarkdown: markdown },
+    });
+
+    expect(result.isError).toBe(false);
+    const task = store.getTask('t-active');
+    if (task === undefined || task.planRef === null) throw new Error('active Task plan was not recorded');
+    expect(task.planRef.path).toBe(join(workspace, '.dev', 'work', 't-active', 'plan.md'));
+    expect(readPlan(task.planRef).text).toBe(markdown);
   });
 });
 describe('task store · stage readiness follows member input state', () => {

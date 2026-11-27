@@ -20,8 +20,10 @@ export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
     .at(-1);
   const reviewed = review?.deliveryState?.paths ?? [];
   if (reviewed.length === 0) return [];
-  const cwd = store.getSession(task.chiefSessionId)?.cwd;
-  if (cwd === undefined) {
+  let cwd: string;
+  try {
+    cwd = store.resolveTaskCwd(task);
+  } catch {
     // Unreachable through today's store (a session always has a cwd), but silence here would be the
     // same "cannot verify, so pass" that the rest of this gate refuses.
     return ['the project directory of this Task is unknown, so its delivery could not be checked against git; end again once the directory is known'];

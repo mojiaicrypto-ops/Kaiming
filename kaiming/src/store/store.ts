@@ -113,6 +113,22 @@ export type TaskStatus =
   | 'cancelling'
   | 'cancelled'
   | 'completed';
+/** P3-2 Task workspace lifecycle; old rows remain legacy and use the chief cwd. */
+export const WORKSPACE_STATES = [
+  'legacy',
+  'in_place',
+  'provisioning',
+  'active',
+  'merged',
+  'branch_kept',
+  'removed',
+] as const;
+export type WorkspaceState = (typeof WORKSPACE_STATES)[number];
+
+export function isWorkspaceState(value: unknown): value is WorkspaceState {
+  return typeof value === 'string' && (WORKSPACE_STATES as readonly string[]).includes(value);
+}
+
 
 export const OPEN_TASK_STATUSES: readonly TaskStatus[] = [
   'active',
@@ -158,6 +174,12 @@ export interface TaskRow {
   readonly completionResultId: string | null;
   /** Content identity of files that were already dirty when the Task was created (S2 v20). */
   readonly dirtyBaseline: DirtyBaseline | null;
+  readonly workspaceState: WorkspaceState;
+  readonly worktreeRoot: string | null;
+  readonly workspacePath: string | null;
+  readonly workspaceRelPath: string | null;
+  readonly branchName: string | null;
+  readonly baseCommit: string | null;
   readonly sourceInputId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -195,6 +217,12 @@ export interface CreateTaskParams {
   readonly summary?: string;
   /** Captured by the caller for write Tasks; omitted or null means no filtering. */
   readonly dirtyBaseline?: DirtyBaseline | null;
+  readonly workspaceState?: WorkspaceState;
+  readonly worktreeRoot?: string | null;
+  readonly workspacePath?: string | null;
+  readonly workspaceRelPath?: string | null;
+  readonly branchName?: string | null;
+  readonly baseCommit?: string | null;
 }
 
 export interface UpdateTaskParams {
@@ -458,7 +486,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -602,6 +630,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   blockReason TEXT,
   completionResultId TEXT,
   dirtyBaseline TEXT,
+  workspaceState TEXT NOT NULL DEFAULT 'legacy',
+  worktreeRoot TEXT,
+  workspacePath TEXT,
+  workspaceRelPath TEXT,
+  branchName TEXT,
+  baseCommit TEXT,
   verificationProfile TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
@@ -2434,6 +2468,12 @@ export class Store {
 
   /** Create a Task and take the chief's slot in one transaction (S3: createTask). */
   createTask(params: CreateTaskParams): TaskRow {
+    const requestedWorkspaceState = params.workspaceState ?? 'in_place';
+    if (requestedWorkspaceState === 'active' && (params.workspacePath ?? '').trim() === '') {
+      throw new StoreError('INVALID_ARGUMENT', 'an active Task must record its workspacePath', {
+        taskId: params.id,
+      });
+    }
     if (params.type === 'read' && params.requiresTest) {
       throw new StoreError('INVALID_ARGUMENT', 'a read Task cannot declare requiresTest', {
         taskId: params.id,
@@ -2522,6 +2562,19 @@ export class Store {
             params.sourceInputId,
             timestamp,
             timestamp,
+          );
+        this.stmt(`UPDATE tasks
+          SET workspaceState = ?, worktreeRoot = ?, workspacePath = ?, workspaceRelPath = ?,
+              branchName = ?, baseCommit = ?
+          WHERE id = ?`,)
+          .run(
+            requestedWorkspaceState,
+            params.worktreeRoot ?? null,
+            params.workspacePath ?? null,
+            params.workspaceRelPath ?? null,
+            params.branchName ?? null,
+            params.baseCommit ?? null,
+            params.id,
           );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -3373,12 +3426,28 @@ export class Store {
     });
   }
 
-  private requireTaskCwd(task: TaskRow): string {
+  /**
+   * The one directory a Task's work uses. Old/legacy and in-place Tasks share the chief's project
+   * checkout; an active worktree Task uses its recorded workspace. A provisioning row without a
+   * workspace is not yet usable and fails explicitly instead of guessing the main checkout.
+   */
+  resolveTaskCwd(task: TaskRow): string {
+    if (task.workspaceState === 'active' || task.workspaceState === 'provisioning') {
+      if (task.workspacePath !== null) return task.workspacePath;
+      throw new StoreError('WORKSPACE_BUSY', 'the Task workspace is still being provisioned', {
+        taskId: task.id,
+        workspaceState: task.workspaceState,
+      });
+    }
     const session = this.getSession(task.chiefSessionId);
     if (session === undefined) {
       throw new StoreError('NOT_FOUND', 'the Task chief session is gone', { taskId: task.id });
     }
     return session.cwd;
+  }
+
+  private requireTaskCwd(task: TaskRow): string {
+    return this.resolveTaskCwd(task);
   }
 
   private requireTaskSession(sessionId: string): TaskSessionRow {
@@ -3592,6 +3661,22 @@ export class Store {
     });
   }
 
+  /**
+   * v21 → v22: workspace metadata for task-level worktrees. Additive; old rows stay on the main
+   * checkout as `legacy`, and new Tasks explicitly record `in_place` or `provisioning`.
+   */
+  private migrateV21ToV22(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'workspaceState', "TEXT NOT NULL DEFAULT 'legacy'");
+      this.addColumn('tasks', 'worktreeRoot', 'TEXT');
+      this.addColumn('tasks', 'workspacePath', 'TEXT');
+      this.addColumn('tasks', 'workspaceRelPath', 'TEXT');
+      this.addColumn('tasks', 'branchName', 'TEXT');
+      this.addColumn('tasks', 'baseCommit', 'TEXT');
+      this.db.exec('PRAGMA user_version = 22;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3735,6 +3820,7 @@ export class Store {
         [18, () => this.migrateV18ToV19()],
         [19, () => this.migrateV19ToV20()],
         [20, () => this.migrateV20ToV21()],
+        [21, () => this.migrateV21ToV22()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -4010,6 +4096,12 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     blockReason: nullable(row['blockReason']),
     completionResultId: nullable(row['completionResultId']),
     dirtyBaseline: parseDirtyBaseline(row['dirtyBaseline']),
+    workspaceState: isWorkspaceState(row['workspaceState']) ? row['workspaceState'] : 'legacy',
+    worktreeRoot: nullable(row['worktreeRoot']),
+    workspacePath: nullable(row['workspacePath']),
+    workspaceRelPath: nullable(row['workspaceRelPath']),
+    branchName: nullable(row['branchName']),
+    baseCommit: nullable(row['baseCommit']),
     sourceInputId: String(row['sourceInputId']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),

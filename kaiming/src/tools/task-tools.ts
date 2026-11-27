@@ -133,6 +133,12 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
     nextStep: task.nextStep,
     blockReason: task.blockReason,
     completionResultId: task.completionResultId,
+    workspaceState: task.workspaceState,
+    worktreeRoot: task.worktreeRoot,
+    workspacePath: task.workspacePath,
+    workspaceRelPath: task.workspaceRelPath,
+    branchName: task.branchName,
+    baseCommit: task.baseCommit,
   };
 }
 
@@ -585,6 +591,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
   const changes = asRecord(params['changes']);
   const planMarkdown = changes === undefined ? undefined : readString(changes, 'planMarkdown');
   let planRef: ArtifactRef | undefined;
+  let planTargetValue: ReturnType<typeof planTarget> | undefined;
   let planState = 'unchanged';
   let acceptanceChangedFlag: boolean | undefined;
   if (planMarkdown !== undefined && existing.type === 'write') {
@@ -608,13 +615,13 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
       });
     }
     acceptanceChangedFlag = acceptanceChanged(onDisk?.text ?? '', planMarkdown);
-    const target = planTarget({
+    planTargetValue = planTarget({
       taskId,
       type: existing.type,
-      projectCwd: context.cwd,
+      projectCwd: context.store.resolveTaskCwd(existing),
       serverWorkDir: context.serverWorkDir,
     });
-    planRef = planRefFor(target, planMarkdown);
+    planRef = planRefFor(planTargetValue, planMarkdown);
   }
   let profileChange: VerificationProfile | undefined;
   if (changes !== undefined && changes['verificationProfile'] !== undefined) {
@@ -705,17 +712,12 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         : {}),
       ...(profileChange !== undefined ? { verificationProfile: profileChange } : {}),
     });
-    if (planMarkdown !== undefined) {
+    if (planMarkdown !== undefined && planTargetValue !== undefined) {
       try {
         commitPlan({
           store: context.store,
           requestKey: `${context.inputId}:plan:${taskId}`,
-          target: planTarget({
-            taskId,
-            type: task.type,
-            projectCwd: context.cwd,
-            serverWorkDir: context.serverWorkDir,
-          }),
+          target: planTargetValue,
           markdown: planMarkdown,
         });
         planState = 'saved';

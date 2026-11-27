@@ -3,12 +3,12 @@
 本页记录开明（Kaiming）各模块的验证基线、关键实现证据与边界，不定义协议。整理日期：2026-11-18。下一轮开发计划与未关闭风险见 [缺口登记](gap-register.md)。
 
 ---
-本页记录开明（Kaiming）各模块的验证基线、关键实现证据与边界，不定义协议。整理日期：2026-11-25。下一轮开发计划与未关闭风险见 [缺口登记](gap-register.md)。
-## 一、当前验证基线总览（截至 2026-11-25）
+本页记录开明（Kaiming）各模块的验证基线、关键实现证据与边界，不定义协议。整理日期：2026-11-27。下一轮开发计划与未关闭风险见 [缺口登记](gap-register.md)。
+## 一、当前验证基线总览（截至 2026-11-27）
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **73 文件 / 758 用例通过**（SQLite WAL 接纳/认领/迁移至 v21、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、沙箱激活时普通删除免确认、写入型/执行型 heredoc 区分、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **74 文件 / 775 用例通过**（SQLite WAL 接纳/认领/迁移至 v22、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、P3-2a workspace 元数据与 Task cwd 解析、沙箱激活时普通删除免确认、写入型/执行型 heredoc 区分、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
 | **前端单元** | `npm --prefix kaiming/webapp test` | **21 文件 / 146 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、输入失败横幅与终态等待、根错误边界等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
@@ -247,4 +247,11 @@
 - **问题**：P3-2 草案把 Worktree 放进 `<dataDir>/worktrees`，与 P3-1 的私有路径冲突；同时缺少迁移、provisioning 恢复、backlog 一致性、setup 沙箱和 `branch_kept` 历史读取的定版；单 Task 多待办也缺少合并准入规则。
 - **决定**：Worktree 独立根（`~/.kaiming-worktrees`，可覆盖，三禁校验）；`worktreeRoot`/`workspacePath`/`workspaceRelPath` 分离；v21→v22 legacy/provisioning 状态与项目级 in_place 索引；失败/崩溃两条清理路径；backlog 先提交后 hash；setup 走 workspace-write 沙箱并只白名单命名的 `KAIMING_*`；`branch_kept` 保留分支并用 `git show` + SHA-256 兜底。P3-3a 调度/配额为 `broad`，默认 4；P3-3b 重叠/文件视图为 `focused`。单 Task 多待办要求同一目标、同一 workKind、共同验收、相同验证档、正交写面。
 - **证据**：本次只改文档与 `test/task-backlog.test.ts`；`task-backlog.test.ts` 7/7（新增 n=2 关联和“后一项 closed 拒绝、无 Task 行、可重试”负向控制）；`npm run typecheck` 通过；`npm run check:prompts` 15/15；独立 Review 先 NEEDS_FIX（显式隔离失败、取消 Worktree 回收、配额默认值），修复后 PASS；独立 Test 7/7，确认 focused 范围充分。
-- **边界**：P3-2/P3-3 仍未实现，没有 Worktree、Schema v22、迁移或 UI 变更；未跑全量套件或 E2E。旧程序不可回读未来 v22；非 Git 第二个 write Task 与默认并发配额 4 是需要升级说明的行为变化。
+- **边界**：T1 当时未改 Schema；随后的 T2a 切片已加 v22 workspace 元数据，但 P3-2 的 Worktree 创建、索引和合流仍未实现，非 Git 第二个 write Task 与默认并发配额 4 仍需升级说明。旧程序不可回读 v22。
+
+### 2026-11-27 · P3-2a 切片 1：Workspace 元数据与 Task cwd
+
+- **问题**：P3-2 需要 Task 级工作目录，但当时只有 chief cwd；直接加 Worktree 而没有统一 cwd 会让 Plan 修订、交付核对和成员目录各写一处。
+- **实现**：v21→v22 additive 加 `workspaceState`/`worktreeRoot`/`workspacePath`/`workspaceRelPath`/`branchName`/`baseCommit`；旧 Task 为 `legacy`，新 Task 为 `in_place`；`resolveTaskCwd` 对 legacy/in_place 取 chief cwd、active/provisioning 取 `workspacePath`（缺失明确失败）。`completion-git` 与 Task Plan 修订改用统一 cwd；Task 摘要暴露 workspace 字段。
+- **证据**：定向 6 文件 **120/120**；全量 **74 文件 / 775 用例**；`npm run typecheck` 通过。独立 Review 首轮发现 Plan 修订仍写 chief 目录（P1），修复为同一 `planTarget` 复用于记引用和写字节后 PASS；独立 Test 120/120、全量 775，并指出缺路径分支无回归；已补 `WORKSPACE_BUSY` 断言与 6 个 legacy 列断言。
+- **边界**：本切片没有 Worktree 创建/回收、项目级 in_place 唯一索引、provisioning 状态迁移或合流；当前运行中的 workbench 仍是旧进程。下一片是分配器 + Worktree 创建，不能把本记录视为 P3-2 完成。

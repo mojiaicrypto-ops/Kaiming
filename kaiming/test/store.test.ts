@@ -1031,6 +1031,89 @@ describe('startup scan and abandoned questions', () => {
     ).toThrow(/visual requires requiresTest=false/);
   });
 
+  it('migrates v21 workspace metadata: old Tasks stay legacy and new Tasks resolve their cwd', () => {
+    const { store, path } = openStore();
+    seed(store);
+    store.createTask({
+      id: 't-old',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'old work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/old.md', sha256: 'o' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    store.controlTask({ taskId: 't-old', command: 'cancel' });
+    closeStore(store);
+    const raw = new DatabaseSync(path);
+    for (const column of ['workspaceState', 'worktreeRoot', 'workspacePath', 'workspaceRelPath', 'branchName', 'baseCommit']) {
+      raw.exec(`ALTER TABLE tasks DROP COLUMN ${column}`);
+    }
+    raw.exec('PRAGMA user_version = 21');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getTask('t-old')).toMatchObject({
+      workspaceState: 'legacy',
+      worktreeRoot: null,
+      workspacePath: null,
+      workspaceRelPath: null,
+      branchName: null,
+      baseCommit: null,
+    });
+    const inPlace = migrated.createTask({
+      id: 't-inplace',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'in place',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/i.md', sha256: 'i' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    expect(inPlace.workspaceState).toBe('in_place');
+    expect(migrated.resolveTaskCwd(inPlace)).toBe(migrated.getSession('s-1')?.cwd);
+
+    const active = migrated.createTask({
+      id: 't-active',
+      projectId: 'p-1',
+      chiefSessionId: 's-2',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'active workspace',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/a.md', sha256: 'a' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+      workspaceState: 'active',
+      worktreeRoot: '/tmp/wt',
+      workspacePath: '/tmp/ws',
+      workspaceRelPath: 'packages/app',
+      branchName: 'kaiming/t-active',
+      baseCommit: 'abc123',
+    });
+    expect(migrated.resolveTaskCwd(active)).toBe('/tmp/ws');
+    expect(() =>
+      migrated.resolveTaskCwd({ ...active, workspaceState: 'active', workspacePath: null }),
+    ).toThrowError(expect.objectContaining({ code: 'WORKSPACE_BUSY' }));
+  });
+
   it('freezes each workKind phase chain and counts backward moves as rework', () => {
     const { store } = openStore();
     seed(store);
