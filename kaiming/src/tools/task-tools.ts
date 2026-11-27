@@ -8,7 +8,7 @@
  * the Task and its tool calls are executed one at a time, so there is no second writer to guard
  * against.
  */
-import { randomUUID } from 'node:crypto';
+
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import {
   StoreError,
@@ -38,8 +38,11 @@ import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import { designCompletionGaps } from '../runtime/design-completion.ts';
+import { WorktreeError } from '../runtime/worktree.ts';
+import { createTaskWithWorkspace } from './task-creation.ts';
 import { deliveryCommitGaps } from './completion-git.ts';
-import { captureDirtyBaseline } from '../runtime/deliverable.ts';
+import { landWorktree } from '../runtime/worktree.ts';
+
 
 export interface TaskToolContext {
   readonly store: Store;
@@ -51,6 +54,10 @@ export interface TaskToolContext {
   readonly inputId: string;
   /** Host work area for read Tasks (`work/<taskId>/plan.md`). */
   readonly serverWorkDir: string;
+  /** Host-controlled worktree root; defaults to KAIMING_WORKTREE_ROOT or ~/.kaiming-worktrees. */
+  readonly worktreeRoot?: string;
+  /** Host data/credential paths a worktree must never be created inside. */
+  readonly privateDirs?: readonly string[];
   /** Host control hook: stops the Task's own work before the final status is written. */
   readonly controlTask?: (params: {
     taskId: string;
@@ -139,6 +146,7 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
     workspaceRelPath: task.workspaceRelPath,
     branchName: task.branchName,
     baseCommit: task.baseCommit,
+    baseBranch: task.baseBranch,
   };
 }
 
@@ -201,6 +209,10 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
           type: 'array',
           items: { type: 'string' },
           description: 'backlog items this Task implements (0..n); each may belong to only one open Task',
+        },
+        isolatedWorkspace: {
+          type: 'boolean',
+          description: 'force a dedicated Git worktree; unsupported projects are refused',
         },
         // update
         phase: { type: 'string', enum: [...PHASES] },
@@ -506,75 +518,61 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       }
     }
   }
-  const taskId = `t-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-  const target = planTarget({ taskId, type, projectCwd: context.cwd, serverWorkDir: context.serverWorkDir });
-  const intendedPlan = planRefFor(target, planMarkdown);
-  // Files the user already had dirty are not this Task's drift (P1-1); a read Task owns no delivery.
-  const dirtyBaseline =
-    type === 'write' ? captureDirtyBaseline(context.cwd, { design: workKind === 'design' }) : null;
+  const rawIsolated = params['isolatedWorkspace'];
+  if (rawIsolated !== undefined && typeof rawIsolated !== 'boolean') {
+    return fail('INVALID_ARGUMENT', 'isolatedWorkspace must be a boolean when given');
+  }
+  const explicitIsolation = rawIsolated === true;
+  if (type === 'read' && explicitIsolation) {
+    return fail('INVALID_ARGUMENT', 'a read Task cannot request an isolated worktree');
+  }
+  const currentTaskId = context.store.getSession(context.sessionId)?.currentTaskId;
+  if (currentTaskId != null) {
+    return fail('WORKSPACE_BUSY', 'this chief session already has an open Task', { taskId: currentTaskId });
+  }
   try {
-    // Task row first: a refused create must not leave a plan file or a save receipt behind.
-    const task = context.store.createTask({
-      id: taskId,
+    const created = createTaskWithWorkspace({
+      store: context.store,
       projectId: context.projectId,
       chiefSessionId: context.sessionId,
-      ownerEpoch: context.store.epoch,
-
-      ...(backlogIds.length > 0 ? { backlogIds } : {}),
+      inputId: context.inputId,
+      cwd: context.cwd,
+      serverWorkDir: context.serverWorkDir,
+      ...(context.worktreeRoot !== undefined ? { worktreeRoot: context.worktreeRoot } : {}),
+      ...(context.privateDirs !== undefined ? { privateDirs: context.privateDirs } : {}),
       type,
       workKind,
-      flowVersion: 1,
-      initialPhase: workKind === 'design' ? 'design' : 'plan',
       requiresTest,
       verificationProfile: verificationProfile ?? null,
       goal,
       scope,
       acceptanceRefs,
       basisRefs,
-      planRef: intendedPlan,
+      backlogIds,
       authorizationRefs: authorization.refs,
-      sourceInputId: context.inputId,
-      summary: `created (${workKind})`,
-      ...(dirtyBaseline !== null && Object.keys(dirtyBaseline).length > 0 ? { dirtyBaseline } : {}),
+      planMarkdown,
+      explicitIsolation,
     });
-
-    let planState = 'saved';
-    try {
-      commitPlan({
-        store: context.store,
-        requestKey: `${context.inputId}:plan:${taskId}`,
-        target,
-        markdown: planMarkdown,
-      });
-    } catch (error) {
-      // The Task exists and points at the intended version; the file still has to be written.
-      planState = 'pending';
-      return ok(
-        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
-        {
-          taskId: task.id,
-          workKind: task.workKind,
-          phase: task.phase,
-          currentSessionIds: task.currentSessionIds,
-          planRef: task.planRef,
-          planState,
-          scopeCheck: scopeCheckFor(context.cwd, planMarkdown, task.dirtyBaseline),
-        },
-      );
-    }
-    return ok(`Task ${task.id} created (${workKind}, requiresTest=${task.requiresTest}, profile=${task.verificationProfile ?? 'none'}); plan at ${target.path}`, {
-      taskId: task.id,
-      workKind: task.workKind,
-      phase: task.phase,
-      currentSessionIds: task.currentSessionIds,
-      planRef: task.planRef,
-      planState,
-      scopeCheck: scopeCheckFor(context.cwd, planMarkdown, task.dirtyBaseline),
-      ...guidanceFor(context.store, task),
-    });
+    const task = created.task;
+    return ok(
+      `Task ${task.id} created (${workKind}, requiresTest=${task.requiresTest}, profile=${task.verificationProfile ?? 'none'}); plan at ${created.target.path}`,
+      {
+        taskId: task.id,
+        workKind: task.workKind,
+        phase: task.phase,
+        currentSessionIds: task.currentSessionIds,
+        planRef: task.planRef,
+        planState: created.planState,
+        scopeCheck: scopeCheckFor(created.taskCwd, planMarkdown, task.dirtyBaseline),
+        ...guidanceFor(context.store, task),
+      },
+    );
   } catch (error) {
-    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-    return fail(code, messageOf(error), { taskId });
+    const code =
+      error instanceof StoreError || error instanceof WorktreeError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), {
+      ...(error instanceof WorktreeError ? error.details : error instanceof StoreError ? error.details : {}),
+    });
   }
 }
 
@@ -807,15 +805,44 @@ function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     // The commit is the model's action, so the host only observes it - and asks the store for the
     // rest of the gaps so one refusal lists everything. Nothing is closed on this path.
     const uncommitted = deliveryCommitGaps(context.store, task);
-    const designGaps = designCompletionGaps(context.store, context.cwd, task);
-    if (uncommitted.length > 0 || designGaps.length > 0) {
-      const gaps = [...context.store.taskCompletionGaps(task.id, completionResultId), ...designGaps, ...uncommitted];
+    const taskCwd = context.store.resolveTaskCwd(task);
+    const designGaps = designCompletionGaps(context.store, taskCwd, task);
+    const completionGaps = context.store.taskCompletionGaps(task.id, completionResultId);
+    const gaps = [...completionGaps, ...designGaps, ...uncommitted];
+    if (gaps.length > 0) {
       return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${gaps.join('; ')}`, {
         gaps,
         nextActions: guidanceFor(context.store, task).nextActions,
       });
     }
-    const result = context.store.endTask({ taskId: task.id, completionResultId });
+    let workspaceState: 'merged' | 'branch_kept' | undefined;
+    if (task.workspaceState === 'active') {
+      if (task.worktreeRoot === null || task.branchName === null || task.baseBranch === null || task.baseCommit === null) {
+        return fail('COMPLETION_INCOMPLETE', 'the active Task has no worktree landing information', {
+          taskId: task.id,
+        });
+      }
+      try {
+        workspaceState = landWorktree({
+          projectRoot: context.cwd,
+          worktreeRoot: task.worktreeRoot,
+          branchName: task.branchName,
+          baseCommit: task.baseCommit,
+          baseBranch: task.baseBranch,
+        }).outcome;
+      } catch (error) {
+        const code = error instanceof WorktreeError ? error.code : 'COMPLETION_INCOMPLETE';
+        return fail(code, messageOf(error), {
+          taskId: task.id,
+          ...(error instanceof WorktreeError ? error.details : {}),
+        });
+      }
+    }
+    const result = context.store.endTask({
+      taskId: task.id,
+      completionResultId,
+      ...(workspaceState !== undefined ? { workspaceState } : {}),
+    });
     if (!result.ok) {
       return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${result.gaps.join('; ')}`, {
         gaps: result.gaps,

@@ -8,7 +8,7 @@
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **74 文件 / 775 用例通过**（SQLite WAL 接纳/认领/迁移至 v22、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、P3-2a workspace 元数据与 Task cwd 解析、沙箱激活时普通删除免确认、写入型/执行型 heredoc 区分、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **75 文件 / 785 用例通过**（SQLite WAL 接纳/认领/迁移至 v23、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、P3-2a 分配与 v23 迁移、真实 Git Worktree 创建/ff-only/branch_kept/Monorepo/根拒绝/task end 落地/provisioning 清理、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
 | **前端单元** | `npm --prefix kaiming/webapp test` | **21 文件 / 146 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、输入失败横幅与终态等待、根错误边界等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
@@ -255,3 +255,10 @@
 - **实现**：v21→v22 additive 加 `workspaceState`/`worktreeRoot`/`workspacePath`/`workspaceRelPath`/`branchName`/`baseCommit`；旧 Task 为 `legacy`，新 Task 为 `in_place`；`resolveTaskCwd` 对 legacy/in_place 取 chief cwd、active/provisioning 取 `workspacePath`（缺失明确失败）。`completion-git` 与 Task Plan 修订改用统一 cwd；Task 摘要暴露 workspace 字段。
 - **证据**：定向 6 文件 **120/120**；全量 **74 文件 / 775 用例**；`npm run typecheck` 通过。独立 Review 首轮发现 Plan 修订仍写 chief 目录（P1），修复为同一 `planTarget` 复用于记引用和写字节后 PASS；独立 Test 120/120、全量 775，并指出缺路径分支无回归；已补 `WORKSPACE_BUSY` 断言与 6 个 legacy 列断言。
 - **边界**：本切片没有 Worktree 创建/回收、项目级 in_place 唯一索引、provisioning 状态迁移或合流；当前运行中的 workbench 仍是旧进程。下一片是分配器 + Worktree 创建，不能把本记录视为 P3-2 完成。
+
+### 2026-11-27 · P3-2a-2：Workspace 分配、Worktree 创建与诚实落地
+
+- **问题**：第二个活动 write Task 仍与第一个共享主工作区；创建/完成路径没有隔离，也没有主分支前移或切换时的安全门禁。
+- **实现**：v23 将旧 `in_place` 转 `legacy` 并加项目级 in_place 唯一索引；task 创建先尝试 in_place，冲突/显式 isolation 时建 `kaiming/<taskId>` Worktree（根默认 `~/.kaiming-worktrees`，可配置，三禁校验）；记录 baseBranch/baseCommit；provisioning 失败强制清理；`task(op=end)` 先检查全部 completion/design/commit 缺口，再按 baseBranch+HEAD+clean 决定 ff-only 或 branch_kept。
+- **证据**：`test/worktree.test.ts` 10/10（创建、ff-only、主分支前移/脏/切换、Monorepo、根拒绝无副作用、显式 isolation 分配、provisioning 失败清理、task end 端到端 merged）；全量 **75 文件 / 785 用例**；`npm run typecheck` 通过。独立 Review 首轮 5 项 + relative root，修复后 PASS；独立 Test 9/9 时确认端到端落地，随后补 cleanup 用例。
+- **边界**：setup hook、孤儿扫描、显式 workspace.remove、Plan/报告正式相对化、UI/P3-3 未做；Worktree 在 merged 后仍保留，清理需后续。当前 workbench 已停止，等待全部完成后重启。

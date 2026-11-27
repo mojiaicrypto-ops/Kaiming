@@ -78,6 +78,7 @@ function task(overrides: Partial<TaskRow> = {}): TaskRow {
     workspaceRelPath: null,
     branchName: null,
     baseCommit: null,
+    baseBranch: null,
     sourceInputId: 'i-1',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',

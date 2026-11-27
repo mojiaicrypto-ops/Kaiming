@@ -37,6 +37,7 @@ export type StoreErrorCode =
   | 'NOT_FOUND'
   | 'RECOVERY_REQUIRED'
   | 'WORKSPACE_BUSY'
+  | 'IN_PLACE_BUSY'
   | 'TASK_BUSY'
   | 'STAGE_NOT_READY'
   | 'COMPLETION_INCOMPLETE'
@@ -180,6 +181,7 @@ export interface TaskRow {
   readonly workspaceRelPath: string | null;
   readonly branchName: string | null;
   readonly baseCommit: string | null;
+  readonly baseBranch: string | null;
   readonly sourceInputId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -223,6 +225,7 @@ export interface CreateTaskParams {
   readonly workspaceRelPath?: string | null;
   readonly branchName?: string | null;
   readonly baseCommit?: string | null;
+  readonly baseBranch?: string | null;
 }
 
 export interface UpdateTaskParams {
@@ -486,7 +489,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -636,6 +639,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   workspaceRelPath TEXT,
   branchName TEXT,
   baseCommit TEXT,
+  baseBranch TEXT,
   verificationProfile TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
@@ -666,6 +670,10 @@ const V2_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
 
 const ONE_PROCESSING_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_inputs_one_processing
   ON session_inputs (sessionId) WHERE status = 'processing';`;
+
+const IN_PLACE_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_one_inplace_per_project
+  ON tasks (projectId) WHERE type = 'write' AND workspaceState = 'in_place'
+    AND status NOT IN ('completed', 'cancelled');`;
 
 const SESSION_BINDINGS_SQL = `CREATE TABLE IF NOT EXISTS session_bindings (
   sessionId TEXT PRIMARY KEY REFERENCES sessions(id),
@@ -2468,7 +2476,7 @@ export class Store {
 
   /** Create a Task and take the chief's slot in one transaction (S3: createTask). */
   createTask(params: CreateTaskParams): TaskRow {
-    const requestedWorkspaceState = params.workspaceState ?? 'in_place';
+    const requestedWorkspaceState = params.workspaceState ?? 'legacy';
     if (requestedWorkspaceState === 'active' && (params.workspacePath ?? '').trim() === '') {
       throw new StoreError('INVALID_ARGUMENT', 'an active Task must record its workspacePath', {
         taskId: params.id,
@@ -2565,7 +2573,7 @@ export class Store {
           );
         this.stmt(`UPDATE tasks
           SET workspaceState = ?, worktreeRoot = ?, workspacePath = ?, workspaceRelPath = ?,
-              branchName = ?, baseCommit = ?
+              branchName = ?, baseCommit = ?, baseBranch = ?
           WHERE id = ?`,)
           .run(
             requestedWorkspaceState,
@@ -2574,6 +2582,7 @@ export class Store {
             params.workspaceRelPath ?? null,
             params.branchName ?? null,
             params.baseCommit ?? null,
+            params.baseBranch ?? null,
             params.id,
           );
       } catch (error) {
@@ -2583,6 +2592,11 @@ export class Store {
         if (message.includes('tasks.chiefSessionId') || message.includes('idx_tasks_one_open_per_chief')) {
           throw new StoreError('WORKSPACE_BUSY', 'the chief session already has an open Task', {
             chiefSessionId: params.chiefSessionId,
+          });
+        }
+        if (message.includes('idx_tasks_one_inplace_per_project') || message.includes('tasks.projectId')) {
+          throw new StoreError('IN_PLACE_BUSY', 'the project already has an in-place write Task', {
+            projectId: params.projectId,
           });
         }
         if (
@@ -2603,6 +2617,47 @@ export class Store {
       this.stmt('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(params.id, timestamp, params.chiefSessionId);
       return this.requireTask(params.id);
+    });
+  }
+
+  /** True when any write Task in the project is still open, including legacy main-checkout work. */
+  hasOpenWriteTask(projectId: string): boolean {
+    const row = this.stmt(`SELECT 1 AS present FROM tasks
+      WHERE projectId = ? AND type = 'write'
+        AND status IN ('active', 'waiting', 'pausing', 'paused', 'cancelling')
+      LIMIT 1`,)
+      .get(projectId) as { present: number } | undefined;
+    return row !== undefined;
+  }
+
+  /** Provisioning failed before the Task became usable; remove the row and release its bindings. */
+  abortProvisioningTask(taskId: string): TaskRow {
+    return this.transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.workspaceState !== 'provisioning') {
+        throw new StoreError('INVALID_ARGUMENT', 'only a provisioning Task can be aborted', {
+          taskId,
+          workspaceState: task.workspaceState,
+        });
+      }
+      this.stmt('DELETE FROM tasks WHERE id = ?').run(taskId);
+      this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE currentTaskId = ?')
+        .run(this.clock(), taskId);
+      return task;
+    });
+  }
+
+  /** The worktree and Plan exist; the Task may now run in its workspace. */
+  activateTaskWorkspace(taskId: string): TaskRow {
+    return this.transaction(() => {
+      const timestamp = this.clock();
+      const result = this.stmt(`UPDATE tasks SET workspaceState = 'active', revision = revision + 1, updatedAt = ?
+        WHERE id = ? AND workspaceState = 'provisioning'`,)
+        .run(timestamp, taskId);
+      if (result.changes !== 1) {
+        throw new StoreError('INVALID_ARGUMENT', 'the Task is not provisioning', { taskId });
+      }
+      return this.requireTask(taskId);
     });
   }
 
@@ -2908,7 +2963,11 @@ export class Store {
   }
 
   /** Release the chief slot and finish the Task; refuses while completion gaps remain. */
-  endTask(params: { taskId: string; completionResultId: string }):
+  endTask(params: {
+    taskId: string;
+    completionResultId: string;
+    workspaceState?: 'merged' | 'branch_kept';
+  }):
     | { readonly ok: true; readonly task: TaskRow }
     | { readonly ok: false; readonly gaps: readonly string[] } {
     return this.transaction(() => {
@@ -2926,9 +2985,11 @@ export class Store {
         return { ok: true, task } as const;
       }
       const timestamp = this.clock();
-      const outcome = this.stmt(`UPDATE tasks SET status = 'completed', completionResultId = ?, revision = revision + 1, updatedAt = ?
-         WHERE id = ?`,)
-        .run(params.completionResultId, timestamp, params.taskId);
+      const outcome = this.stmt(`UPDATE tasks
+        SET status = 'completed', completionResultId = ?, revision = revision + 1, updatedAt = ?,
+            workspaceState = COALESCE(?, workspaceState)
+        WHERE id = ?`,)
+        .run(params.completionResultId, timestamp, params.workspaceState ?? null, params.taskId);
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'the Task could not be completed', { taskId: params.taskId });
       }
@@ -3677,6 +3738,16 @@ export class Store {
     });
   }
 
+  /** v22 → v23: enforce one in-place write Task per project; old in-place rows stay legacy. */
+  private migrateV22ToV23(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'baseBranch', 'TEXT');
+      this.stmt("UPDATE tasks SET workspaceState = 'legacy' WHERE workspaceState = 'in_place'").run();
+      this.db.exec(IN_PLACE_INDEX_SQL);
+      this.db.exec('PRAGMA user_version = 23;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3821,6 +3892,7 @@ export class Store {
         [19, () => this.migrateV19ToV20()],
         [20, () => this.migrateV20ToV21()],
         [21, () => this.migrateV21ToV22()],
+        [22, () => this.migrateV22ToV23()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -4102,6 +4174,7 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     workspaceRelPath: nullable(row['workspaceRelPath']),
     branchName: nullable(row['branchName']),
     baseCommit: nullable(row['baseCommit']),
+    baseBranch: nullable(row['baseBranch']),
     sourceInputId: String(row['sourceInputId']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),

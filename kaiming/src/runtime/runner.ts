@@ -138,6 +138,8 @@ export interface RunnerOptions {
   readonly privateDirs?: readonly string[];
   /** OS sandbox runtime resolved at service start; absent only in unit tests that do not exercise it. */
   readonly sandbox?: SandboxRuntime;
+  /** Optional host worktree root; task tools default from KAIMING_WORKTREE_ROOT. */
+  readonly worktreeRoot?: string;
   /** Task type the session currently runs under; `undefined` while it has no Task yet. */
   readonly taskTypeOf?: (sessionId: string) => 'read' | 'write' | undefined;
   /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
@@ -658,6 +660,8 @@ export class InputRunner {
           store: this.options.store,
           sessionId,
           projectId: session.projectId,
+          ...(this.options.privateDirs !== undefined ? { privateDirs: this.options.privateDirs } : {}),
+          ...(this.options.worktreeRoot !== undefined ? { worktreeRoot: this.options.worktreeRoot } : {}),
           cwd: session.cwd,
           roleId: session.roleId,
           inputId: live?.inputId ?? input.inputId,

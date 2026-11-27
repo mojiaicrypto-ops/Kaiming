@@ -139,11 +139,9 @@ describe('task create', () => {
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('WORKSPACE_BUSY');
     expect(w.store.listTasks(w.projectId)).toHaveLength(1);
-    // Nothing was recorded for the refused call: no receipt, and no extra plan directory.
-    const refusedTaskId = String(refused.details['taskId'] ?? '');
-    expect(refusedTaskId).not.toBe('');
-    expect(w.store.getFileSave(`i-1:plan:${refusedTaskId}`)).toBeUndefined();
     const acceptedTaskId = String(w.store.listTasks(w.projectId)[0]?.id ?? '');
+    // The early refusal names the already-open Task; it creates no second plan directory.
+    expect(String(refused.details['taskId'] ?? '')).toBe(acceptedTaskId);
     expect(readdirSync(join(w.cwd, '.dev', 'work'))).toEqual([acceptedTaskId]);
   });
 });

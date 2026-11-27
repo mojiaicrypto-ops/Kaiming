@@ -48,6 +48,8 @@ export interface SandboxPolicy {
   readonly readOnlySubpaths: readonly string[];
   readonly tempDir: string;
   readonly allowDockerSocket: boolean;
+  /** Explicit non-secret variables a host-owned setup command may receive. */
+  readonly envAllowlist?: readonly string[];
   readonly allowSshAgent: boolean;
   /** Structural slot only: this layer is not an egress control. */
   readonly networkAccess: 'allow';
@@ -325,7 +327,7 @@ export function sandboxEnvironment(base: NodeJS.ProcessEnv, policy: SandboxPolic
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined) continue;
-    if (!BASE_ENV.has(key) && !BASE_ENV_PREFIX.some((prefix) => key.startsWith(prefix))) continue;
+    if (!BASE_ENV.has(key) && !BASE_ENV_PREFIX.some((prefix) => key.startsWith(prefix)) && !(policy.envAllowlist ?? []).includes(key)) continue;
     if (key === 'DOCKER_HOST' && !policy.allowDockerSocket) continue;
     if (key === 'SSH_AUTH_SOCK' && !policy.allowSshAgent) continue;
     env[key] = value;

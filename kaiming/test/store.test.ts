@@ -1052,7 +1052,8 @@ describe('startup scan and abandoned questions', () => {
     store.controlTask({ taskId: 't-old', command: 'cancel' });
     closeStore(store);
     const raw = new DatabaseSync(path);
-    for (const column of ['workspaceState', 'worktreeRoot', 'workspacePath', 'workspaceRelPath', 'branchName', 'baseCommit']) {
+    raw.exec('DROP INDEX IF EXISTS idx_tasks_one_inplace_per_project');
+    for (const column of ['workspaceState', 'worktreeRoot', 'workspacePath', 'workspaceRelPath', 'branchName', 'baseCommit', 'baseBranch']) {
       raw.exec(`ALTER TABLE tasks DROP COLUMN ${column}`);
     }
     raw.exec('PRAGMA user_version = 21');
@@ -1068,6 +1069,7 @@ describe('startup scan and abandoned questions', () => {
       workspaceRelPath: null,
       branchName: null,
       baseCommit: null,
+      baseBranch: null,
     });
     const inPlace = migrated.createTask({
       id: 't-inplace',
@@ -1083,6 +1085,7 @@ describe('startup scan and abandoned questions', () => {
       planRef: { storage: 'server', path: '/tmp/i.md', sha256: 'i' },
       authorizationRefs: [],
       sourceInputId: 'i-1',
+      workspaceState: 'in_place',
     });
     expect(inPlace.workspaceState).toBe('in_place');
     expect(migrated.resolveTaskCwd(inPlace)).toBe(migrated.getSession('s-1')?.cwd);
@@ -1107,6 +1110,7 @@ describe('startup scan and abandoned questions', () => {
       workspaceRelPath: 'packages/app',
       branchName: 'kaiming/t-active',
       baseCommit: 'abc123',
+      baseBranch: 'main',
     });
     expect(migrated.resolveTaskCwd(active)).toBe('/tmp/ws');
     expect(() =>

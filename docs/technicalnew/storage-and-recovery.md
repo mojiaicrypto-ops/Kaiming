@@ -38,6 +38,8 @@ v19→v20：`tasks` 加 `dirtyBaseline`（nullable JSON，旧行为 NULL）。�
 
 v21→v22：`tasks` 加 `workspaceState`（默认 `legacy`）、`worktreeRoot`、`workspacePath`、`workspaceRelPath`、`branchName`、`baseCommit`（nullable）。旧 Task 保持 `legacy`，等价原主工作区；新 Task 显式写 `in_place`。本切片只落元数据与统一 cwd 解析，Worktree 创建、项目级 in_place 唯一索引、provisioning 状态迁移和合流门禁在后续切片实现。
 
+v22→v23：既有 `in_place` 行改回 `legacy`（仍用主工作区），并创建 `idx_tasks_one_inplace_per_project` 局部唯一索引。新 Task 使用 `in_place` 或 `provisioning`→`active`；第二个活动 write Task 由 task 工具分配 `kaiming/<taskId>` Worktree。主分支未移动且干净时 ff-only，否则保留分支；Worktree 回收/孤儿扫描与本页后续切片同步。
+
 interactions.state=pending/resolved/stale。pending 已保存、可展示；resolved 答复不可覆写，相同重试返回原回执，不同答复冲突；stale 不恢复原等待。没有“UI 已呈现”准入状态，保存后广播、断线从快照重现。请求/答复唯一见 M5。
 
 Task.status=active/waiting/pausing/paused/cancelling/cancelled/completed。阶段/业务摘要由主管 task(op=update) 写，控制状态由服务记录；子事件不自动推进 phase。专业状态通过 currentInput、正式报告与 pending 交互查询：queued/working/waiting_user/stopping/completed/failed/stopped/interrupted。正式结果保存且 Pi 停稳才 completed；一次输入结束没有期待报告为 REPORT_MISSING。检查 verdict=failed 是检查结论，不等于执行异常。
