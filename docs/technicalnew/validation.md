@@ -262,3 +262,10 @@
 - **实现**：v23 将旧 `in_place` 转 `legacy` 并加项目级 in_place 唯一索引；task 创建先尝试 in_place，冲突/显式 isolation 时建 `kaiming/<taskId>` Worktree（根默认 `~/.kaiming-worktrees`，可配置，三禁校验）；记录 baseBranch/baseCommit；provisioning 失败强制清理；`task(op=end)` 先检查全部 completion/design/commit 缺口，再按 baseBranch+HEAD+clean 决定 ff-only 或 branch_kept。
 - **证据**：`test/worktree.test.ts` 10/10（创建、ff-only、主分支前移/脏/切换、Monorepo、根拒绝无副作用、显式 isolation 分配、provisioning 失败清理、task end 端到端 merged）；全量 **75 文件 / 785 用例**；`npm run typecheck` 通过。独立 Review 首轮 5 项 + relative root，修复后 PASS；独立 Test 9/9 时确认端到端落地，随后补 cleanup 用例。
 - **边界**：setup hook、孤儿扫描、显式 workspace.remove、Plan/报告正式相对化、UI/P3-3 未做；Worktree 在 merged 后仍保留，清理需后续。当前 workbench 已停止，等待全部完成后重启。
+
+### 2026-11-27 · P3-2b：Artifact 相对路径与 Worktree 回收
+
+- **问题**：merged Worktree 删除后绝对 Plan/报告路径失效；branch_kept 需要分支兜底；崩溃的 provisioning 可能留下目录。
+- **实现**：ArtifactRef 增加项目相对路径；`readArtifact` 按活动路径→主工作区→`git show` 分支读取并对 SHA-256 校验；merged `task end` 回收 Worktree/分支；启动扫描 provisioning，强制清理并取消 Task。
+- **证据**：Worktree 测试 10/10（merged 后 Plan 从主工作区读取、Worktree 目录消失）；全量 75/785；typecheck 通过。
+- **边界**：branch_kept 自动回收、显式 workspace.remove、setup hook、P3-3 并发/UI 未完成；当前 workbench 仍停止。

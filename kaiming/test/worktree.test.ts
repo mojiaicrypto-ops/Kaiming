@@ -7,6 +7,7 @@ import { Store } from '../src/store/store.ts';
 import { createTaskWithWorkspace } from '../src/tools/task-creation.ts';
 import { createTaskTool } from '../src/tools/task-tools.ts';
 import { snapshotDelivery } from '../src/runtime/deliverable.ts';
+import { readArtifact } from '../src/runtime/artifact-reader.ts';
 import {
   createWorktree,
   gitShowFile,
@@ -467,11 +468,9 @@ describe('task worktrees', () => {
     expect(store.getTask(created.task.id)?.workspaceState).toBe('merged');
     expect(store.getTask(created.task.id)?.status).toBe('completed');
     expect(existsSync(join(project, '.dev', 'work', created.task.id, 'plan.md'))).toBe(true);
-    removeWorktree({
-      projectRoot: project,
-      worktreeRoot: created.task.worktreeRoot as string,
-      branchName: created.task.branchName as string,
-      deleteBranch: true,
-    });
+    const completed = store.getTask(created.task.id);
+    if (completed === undefined || completed.planRef === null) throw new Error('completed Task missing plan');
+    expect(readArtifact(store, completed, completed.planRef).current).toBe(true);
+    expect(existsSync(created.task.worktreeRoot as string)).toBe(false);
   });
 });

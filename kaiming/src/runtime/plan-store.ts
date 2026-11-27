@@ -15,6 +15,7 @@ import { StoreError, type ArtifactRef, type Store, type TaskType } from '../stor
 export interface PlanTarget {
   readonly storage: 'project' | 'server';
   readonly path: string;
+  readonly relativePath?: string;
 }
 
 /**
@@ -28,7 +29,11 @@ export function planTarget(params: {
   serverWorkDir: string;
 }): PlanTarget {
   return params.type === 'write'
-    ? { storage: 'project', path: join(params.projectCwd, '.dev', 'work', params.taskId, 'plan.md') }
+    ? {
+        storage: 'project',
+        path: join(params.projectCwd, '.dev', 'work', params.taskId, 'plan.md'),
+        relativePath: join('.dev', 'work', params.taskId, 'plan.md'),
+      }
     : { storage: 'server', path: join(params.serverWorkDir, params.taskId, 'plan.md') };
 }
 
@@ -36,9 +41,13 @@ export function digestOfText(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** The version a Plan write *would* produce: computed before anything is written. */
 export function planRefFor(target: PlanTarget, markdown: string): ArtifactRef {
-  return { storage: target.storage, path: target.path, sha256: digestOfText(markdown) };
+  return {
+    storage: target.storage,
+    path: target.path,
+    sha256: digestOfText(markdown),
+    ...(target.relativePath !== undefined ? { relativePath: target.relativePath } : {}),
+  };
 }
 
 export interface PlanCommitResult {

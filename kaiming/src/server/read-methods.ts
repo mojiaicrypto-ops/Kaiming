@@ -9,8 +9,8 @@ import { dirname, join, relative, sep } from 'node:path';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 
-import { readReportBody } from '../runtime/report-store.ts';
-import { digestOfText, readPlan } from '../runtime/plan-store.ts';
+import { readArtifact } from '../runtime/artifact-reader.ts';
+import { digestOfText } from '../runtime/plan-store.ts';
 import { scopeCheckFor } from '../runtime/plan-contract.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
@@ -528,7 +528,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       // The Plan is the authority a caller judges work by; a missing or changed file is reported as
       // such rather than silently replaced by a summary.
-      const planRead = task.planRef === null ? undefined : readPlan(task.planRef);
+      const planRead = task.planRef === null ? undefined : readArtifact(store, task, task.planRef);
       const plan =
         params['includePlan'] === true && planRead !== undefined
           ? { markdown: planRead.text, current: planRead.current }
@@ -537,7 +537,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         task: taskSummary(store, task),
         plan,
         scopeCheck:
-          planRead === undefined ? null : scopeCheckFor(project.realPath, planRead.text, task.dirtyBaseline),
+          planRead === undefined ? null : scopeCheckFor(store.resolveTaskCwd(task), planRead.text, task.dirtyBaseline),
 
         members: store.listTaskSessions(task.id).map((member) => {
           // The delegation-time currentInputId is history; the live session state tells the
@@ -603,7 +603,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         throw new RpcError('NOT_FOUND', `result ${resultId} does not belong to Task ${taskId}`, { resultId });
       }
       // The body is read through the recorded reference: a caller never supplies a path.
-      const body = readReportBody(result.bodyRef);
+      const body = readArtifact(store, task, result.bodyRef);
       if (!body.current) {
         throw new RpcError('REPORT_STALE', 'the report body is missing or changed on disk', {
           path: result.bodyRef.path,
@@ -614,7 +614,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       // a Server-side report (read Task or read-only evidence) must not be addressable by path.
       const relativePath =
         result.bodyRef.storage === 'project'
-          ? relative(project.realPath, result.bodyRef.path).split(sep).join('/')
+          ? (result.bodyRef.relativePath ?? relative(project.realPath, result.bodyRef.path)).split(sep).join('/')
           : null;
       return {
         result: resultSummary(store, result),

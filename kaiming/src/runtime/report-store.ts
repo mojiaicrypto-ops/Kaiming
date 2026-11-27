@@ -16,6 +16,7 @@ import type { ArtifactRef, TaskType } from '../store/store.ts';
 export interface ReportTarget {
   readonly storage: 'project' | 'server';
   readonly path: string;
+  readonly relativePath?: string;
 }
 
 export function reportTarget(params: {
@@ -35,14 +36,22 @@ export function reportTarget(params: {
   const readOnly = params.kind === 'investigation' || params.kind === 'recovery';
   return params.taskType === 'read' || readOnly
     ? { storage: 'server', path: join(params.serverWorkDir, relative) }
-    : { storage: 'project', path: join(params.cwd, '.dev', 'work', relative) };
+    : {
+        storage: 'project',
+        path: join(params.cwd, '.dev', 'work', relative),
+        relativePath: join('.dev', 'work', relative),
+      };
 }
 
 /** The version this report body *would* have: computed before anything is written. */
 export function reportRefFor(target: ReportTarget, markdown: string): ArtifactRef {
-  return { storage: target.storage, path: target.path, sha256: digestOfText(markdown) };
+  return {
+    storage: target.storage,
+    path: target.path,
+    sha256: digestOfText(markdown),
+    ...(target.relativePath !== undefined ? { relativePath: target.relativePath } : {}),
+  };
 }
-
 /** Write the body atomically in its final directory; the caller then reads it back to verify it. */
 export function writeReportBody(target: ReportTarget, markdown: string): void {
   mkdirSync(dirname(target.path), { recursive: true });

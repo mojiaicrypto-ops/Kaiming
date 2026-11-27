@@ -12,7 +12,7 @@ import { RESULT_KINDS, StoreError, type ResultKind, type ResultRow, type Store, 
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { ROLE_PHASE, dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
-import { readPlan } from '../runtime/plan-store.ts';
+import { readArtifact } from '../runtime/artifact-reader.ts';
 import { acceptanceText, declaredVerificationProfile, scopeCheckFor, scopeCheckText, type VerificationProfile } from '../runtime/plan-contract.ts';
 
 const ACCEPTANCE_LIMIT = 1_500;
@@ -127,7 +127,7 @@ export function resolveVerificationProfile(
 }
 
 function envelopeFacts(context: DispatchContext, task: TaskRow): DispatchEnvelopeFacts {
-  const planText = task.planRef === null ? undefined : readPlan(task.planRef).text;
+  const planText = task.planRef === null ? undefined : readArtifact(context.store, task, task.planRef).text;
   const upstream =
     task.phase === 'review' || task.phase === 'test' || task.phase === 'settle'
       ? latestUpstream(context.store, task)

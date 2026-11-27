@@ -143,6 +143,8 @@ export interface ArtifactRef {
   readonly storage: 'project' | 'server';
   readonly path: string;
   readonly sha256: string;
+  /** Project-relative path for project artifacts; lets a removed worktree resolve main/branch. */
+  readonly relativePath?: string;
 }
 
 export interface TaskRow {
@@ -2647,6 +2649,31 @@ export class Store {
     });
   }
 
+  /** Tasks that crashed between reservation and activation. */
+  listProvisioningTasks(): TaskRow[] {
+    const rows = this.stmt("SELECT * FROM tasks WHERE workspaceState = 'provisioning'")
+      .all() as Record<string, unknown>[];
+    return rows.map(toTaskRow);
+  }
+
+  /** Startup compensation: the Task never became usable; keep an honest cancelled record. */
+  cancelProvisioningTask(taskId: string): TaskRow {
+    return this.transaction(() => {
+      const timestamp = this.clock();
+      const result = this.stmt(`UPDATE tasks
+        SET status = 'cancelled', workspaceState = 'removed', blockReason = ?,
+            revision = revision + 1, updatedAt = ?
+        WHERE id = ? AND workspaceState = 'provisioning'`,)
+        .run('workspace provisioning was interrupted by a process restart', timestamp, taskId);
+      if (result.changes !== 1) {
+        throw new StoreError('INVALID_ARGUMENT', 'the Task is not provisioning', { taskId });
+      }
+      this.stmt('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE currentTaskId = ?')
+        .run(timestamp, taskId);
+      return this.requireTask(taskId);
+    });
+  }
+
   /** The worktree and Plan exist; the Task may now run in its workspace. */
   activateTaskWorkspace(taskId: string): TaskRow {
     return this.transaction(() => {
@@ -3966,7 +3993,13 @@ function parseArtifactRef(value: unknown): ArtifactRef | null {
   if ((storage !== 'project' && storage !== 'server') || typeof path !== 'string' || typeof sha256 !== 'string') {
     return null;
   }
-  return { storage, path, sha256 };
+  const relativePath = record['relativePath'];
+  return {
+    storage,
+    path,
+    sha256,
+    ...(typeof relativePath === 'string' ? { relativePath } : {}),
+  };
 }
 
 function parseJsonOrNull(value: unknown): unknown {

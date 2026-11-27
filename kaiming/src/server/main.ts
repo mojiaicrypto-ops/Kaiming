@@ -33,6 +33,7 @@ import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
 import type { RunOutcome } from '../runtime/runner.ts';
 import { createSandboxRuntime, type SandboxMode } from '../runtime/os-sandbox.ts';
+import { defaultWorktreeRoot, removeWorktree } from '../runtime/worktree.ts';
 import { isHiddenRawQuestionAnswerEvent } from '../runtime/raw-question.ts';
 import { isHiddenInternalTurnEvent } from '../runtime/model-output-guard.ts';
 import { classifyModelFailure, publicFailureDetail } from '../runtime/model-error.ts';
@@ -150,6 +151,34 @@ export async function startWorkbench(options: StartOptions): Promise<{
   });
   if (!sandbox.status.active) {
     log(`sandbox: ${sandbox.status.mode}/${sandbox.status.backend}: ${sandbox.status.reason ?? 'inactive'}`);
+  }
+  for (const task of store.listProvisioningTasks()) {
+    const project = store.getProject(task.projectId);
+    if (project !== undefined && task.worktreeRoot !== null && task.branchName !== null) {
+      try {
+        removeWorktree({
+          projectRoot: project.realPath,
+          worktreeRoot: task.worktreeRoot,
+          branchName: task.branchName,
+          deleteBranch: true,
+          force: true,
+        });
+      } catch (error) {
+        log(
+          `could not remove interrupted worktree for ${task.id}: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+    try {
+      store.cancelProvisioningTask(task.id);
+      log(`cancelled interrupted workspace provisioning for ${task.id}`);
+    } catch (error) {
+      log(
+        `could not cancel interrupted provisioning ${task.id}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();

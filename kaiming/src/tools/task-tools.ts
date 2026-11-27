@@ -23,8 +23,8 @@ import {
   type VerificationProfile,
   type WorkKind,
 } from '../store/store.ts';
-import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
-import { readReportBody } from '../runtime/report-store.ts';
+import { commitPlan, digestOfText, planRefFor, planTarget } from '../runtime/plan-store.ts';
+import { readArtifact } from '../runtime/artifact-reader.ts';
 import {
   acceptanceChanged,
   acceptanceGap,
@@ -42,6 +42,7 @@ import { WorktreeError } from '../runtime/worktree.ts';
 import { createTaskWithWorkspace } from './task-creation.ts';
 import { deliveryCommitGaps } from './completion-git.ts';
 import { landWorktree } from '../runtime/worktree.ts';
+import { removeWorktree } from '../runtime/worktree.ts';
 
 
 export interface TaskToolContext {
@@ -604,7 +605,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
     // The chief is the only writer of the Plan, but a person can edit the file. Never overwrite a
     // version nobody saw: compare the file with what the Task recorded and with what is being written.
     const recorded = existing.planRef?.sha256;
-    const onDisk = existing.planRef === null ? undefined : readPlan(existing.planRef);
+    const onDisk = existing.planRef === null ? undefined : readArtifact(context.store, existing, existing.planRef);
     const diskDigest = onDisk !== undefined && onDisk.text !== '' ? digestOfText(onDisk.text) : recorded;
     const requested = digestOfText(planMarkdown);
     if (diskDigest !== undefined && diskDigest !== recorded && diskDigest !== requested) {
@@ -637,7 +638,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
       ? (changes['requiresTest'] as boolean)
       : undefined;
   if (existing.workKind === 'implement' && (profileChange !== undefined || requiresTestChange !== undefined)) {
-    const planText = planMarkdown ?? (existing.planRef === null ? '' : readPlan(existing.planRef).text);
+    const planText = planMarkdown ?? (existing.planRef === null ? '' : readArtifact(context.store, existing, existing.planRef).text);
     const declared = declaredVerificationProfile(planText);
     const nextProfile = profileChange ?? existing.verificationProfile ?? declared;
     if (nextProfile === undefined) {
@@ -751,7 +752,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         ...(acceptanceChangedFlag === true ? { acceptanceChanged: true } : {}),
         scopeCheck: scopeCheckFor(
           context.cwd,
-          planMarkdown ?? (task.planRef === null ? '' : readPlan(task.planRef).text),
+          planMarkdown ?? (task.planRef === null ? '' : readArtifact(context.store, task, task.planRef).text),
           task.dirtyBaseline,
         ),
         ...guidance,
@@ -848,6 +849,22 @@ function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
         gaps: result.gaps,
         nextActions: guidanceFor(context.store, task).nextActions,
       });
+    }
+    if (
+      workspaceState === 'merged' &&
+      task.worktreeRoot !== null &&
+      task.branchName !== null
+    ) {
+      try {
+        removeWorktree({
+          projectRoot: context.cwd,
+          worktreeRoot: task.worktreeRoot,
+          branchName: task.branchName,
+          deleteBranch: true,
+        });
+      } catch {
+        // The Task is completed and its refs resolve from main; a residual directory is removable later.
+      }
     }
     return ok(`Task ${task.id} completed`, { taskId: task.id, status: result.task.status, nextActions: [] });
   } catch (error) {
@@ -946,7 +963,7 @@ function getOp(
   params: Record<string, unknown>,
   chief: boolean,
 ): ToolOutcome {
-  const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
+  const plan = task.planRef === null ? { text: '', current: false } : readArtifact(context.store, task, task.planRef);
   const withBodies = params['includeResultBodies'] === true;
   const results = context.store.listTaskResults(task.id).map((result) => ({
     resultId: result.resultId,
@@ -957,7 +974,7 @@ function getOp(
     delivery: result.deliveryState === null ? null : { digest: result.deliveryState.digest, files: result.deliveryState.paths.length },
     bodyRef: result.bodyRef,
     checks: result.checks,
-    ...(withBodies ? { body: readReportBody(result.bodyRef).text } : {}),
+    ...(withBodies ? { body: readArtifact(context.store, task, result.bodyRef).text } : {}),
   }));
   const members = context.store.listTaskSessions(task.id).map((member) => {
     const input = member.currentInputId === null ? undefined : context.store.getInput(member.currentInputId);
