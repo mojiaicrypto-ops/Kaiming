@@ -241,3 +241,10 @@
 - **实现**：`runner.settleStep` 轮询当前成员 input；对仍为 `queued` 的成员按 Task 的 role/project 解析有效配置并查询 `PiRuntimeFactory.isAvailable`，不可用时返回 `blocked` 且在该成员 `error` 写入 `MODEL_UNAVAILABLE`，不修改 queued 输入；每条轮询先检查当前主管 live input 的 `stopRequestKey`，命中立即返回 `stopped`。`DelegationReturn.outcome` 增加 `stopped`；不新增 Store schema，不把成员改成 failed/blocked 终态，配置修复后 worker 仍可继续。
 - **证据**：`test/runtime.test.ts` 67/67 通过（新增 3 个用例：不可用成员模型立即 `t-blocked blocked` 且成员仍 queued；主管等待中 stop 在 2s 内返回 `t-stop stopped`、主管输入 stopped、成员仍 queued；可用 queued 成员返回 timeout 且无 `MODEL_UNAVAILABLE`）；`npm run typecheck` 通过。独立 Test 在反转两处源码的临时副本上观察对应用例分别以 5204ms > 2s、19811ms > 2s 失败，证明测试有区分力；独立 Review PASS，唯一非阻断的 outcome 断言缺口已补。验证档 `focused`，只运行 `test/runtime.test.ts`；未跑全量套件或 E2E。
 - **边界**：当前运行中的 workbench 尚未重启，本修复只对重启后的代码生效；没有改变工作台 UI 对子会话 blocked 事件的呈现，主管当前回合通过 `task(op=dispatch)` 的结构化结果获得原因；超时后主管不再等待但未被唤醒的边界未在本任务扩展。
+
+### 2026-11-27 · P3-2/P3-3 契约定版与单 Task 多待办准入
+
+- **问题**：P3-2 草案把 Worktree 放进 `<dataDir>/worktrees`，与 P3-1 的私有路径冲突；同时缺少迁移、provisioning 恢复、backlog 一致性、setup 沙箱和 `branch_kept` 历史读取的定版；单 Task 多待办也缺少合并准入规则。
+- **决定**：Worktree 独立根（`~/.kaiming-worktrees`，可覆盖，三禁校验）；`worktreeRoot`/`workspacePath`/`workspaceRelPath` 分离；v21→v22 legacy/provisioning 状态与项目级 in_place 索引；失败/崩溃两条清理路径；backlog 先提交后 hash；setup 走 workspace-write 沙箱并只白名单命名的 `KAIMING_*`；`branch_kept` 保留分支并用 `git show` + SHA-256 兜底。P3-3a 调度/配额为 `broad`，默认 4；P3-3b 重叠/文件视图为 `focused`。单 Task 多待办要求同一目标、同一 workKind、共同验收、相同验证档、正交写面。
+- **证据**：本次只改文档与 `test/task-backlog.test.ts`；`task-backlog.test.ts` 7/7（新增 n=2 关联和“后一项 closed 拒绝、无 Task 行、可重试”负向控制）；`npm run typecheck` 通过；`npm run check:prompts` 15/15；独立 Review 先 NEEDS_FIX（显式隔离失败、取消 Worktree 回收、配额默认值），修复后 PASS；独立 Test 7/7，确认 focused 范围充分。
+- **边界**：P3-2/P3-3 仍未实现，没有 Worktree、Schema v22、迁移或 UI 变更；未跑全量套件或 E2E。旧程序不可回读未来 v22；非 Git 第二个 write Task 与默认并发配额 4 是需要升级说明的行为变化。

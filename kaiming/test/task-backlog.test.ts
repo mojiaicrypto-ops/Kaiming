@@ -24,6 +24,10 @@ const BACKLOG = [
   '### B-1 可以实施',
   '- 状态: open',
   '',
+  '### B-5 另一条可实施',
+  '- 状态: open',
+  '',
+  '',
   '### B-2 已经关闭',
   '- 状态: done',
   '- 说明: 完成',
@@ -118,6 +122,28 @@ describe('backlog association', () => {
     expect(result.isError).toBe(false);
     const taskId = result.details['taskId'] as string;
     expect(w.store.getTask(taskId)?.backlogIds).toEqual(['B-1']);
+  });
+
+  it('creates one Task carrying several open backlog items', async () => {
+    const w = world();
+    const result = await w.execute(createArgs({
+      goal: '实施 B-1 和 B-5',
+      backlogIds: ['B-1', 'B-5'],
+    }));
+
+    expect(result.isError).toBe(false);
+    const task = w.store.getTask(result.details['taskId'] as string);
+    expect(task?.backlogIds).toEqual(['B-1', 'B-5']);
+  });
+
+  it('refuses a multi-item request when any later item is not open', async () => {
+    const w = world();
+    const refused = await w.execute(createArgs({ backlogIds: ['B-1', 'B-2'] }));
+    expect(refused.details['code']).toBe('INVALID_ARGUMENT');
+    expect(w.store.listTasks('p-1')).toHaveLength(0);
+
+    const retry = await w.execute(createArgs({ backlogIds: ['B-1'] }));
+    expect(retry.isError).toBe(false);
   });
 
   it('refuses another open Task on the same item and names the existing one', async () => {

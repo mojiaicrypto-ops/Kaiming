@@ -323,7 +323,7 @@
 
 #### P3-2：按需 Task 级 Git Worktree 隔离与诚实合流门禁（`WP-Worktree`）
 
-**状态**：待实施（建议在 `P3-1` 跑稳后切入；依赖 `P3-1` 对 `registry.ts` `cwd` 缓存键的修复，但运行时与沙箱完全解耦）。
+**状态**：定版（2026-11-27），待实施。P3-1 已实施；本定版覆盖旧草案中 `<dataDir>/worktrees`、宿主裸跑 setup、绝对 Plan/报告路径等冲突项。
 
 - **问题与根因**：
   1. 数据库层（`idx_tasks_one_open_per_chief` 与 `claimBacklogItems`）已支持同项目多主管会话各自推进一项 Task，但当前所有 Task 及其成员全部共享 `project.realPath` 与同一个 `.git/index`。并发写 Task 时，一方的改动会污染另一方的 `scopeCheck`、`snapshotDelivery` 与提交门禁。
@@ -334,29 +334,35 @@
      - **单一 `resolveTaskCwd(store, task)`**：统一替换 `Store.requireTaskCwd`、`completion-git.ts:23`、`task-tools.ts`（`createOp`/`updateOp`/`getOp`/`endOp`）、`delegation-tools.ts:139`、`read-methods.ts:537` 中的目录来源。
      - **`store.ts` `rebindProject`**：重新绑定项目目录时，不覆盖仍处于活动 Worktree 状态的会话 `cwd`。
   2. **Schema 迁移 `v21 → v22`（`kaiming/src/store/store.ts`）**：
-     - `tasks` 表新增列：`workspacePath TEXT`、`branchName TEXT`、`baseCommit TEXT`、`workspaceState TEXT NOT NULL DEFAULT 'in_place'`（枚举：`in_place | active | merged | branch_kept | removed`）。旧行默认 `in_place`、其余列 `NULL`，100% 向下兼容。
+    - `tasks` 表新增列：`worktreeRoot TEXT`、`workspacePath TEXT`、`workspaceRelPath TEXT`、`branchName TEXT`、`baseCommit TEXT`、`workspaceState TEXT NOT NULL DEFAULT 'legacy'`（枚举：`legacy | in_place | provisioning | active | merged | branch_kept | removed`）。旧行 `legacy`，其余列为 `NULL`；`legacy` 等价原主工作区模式。新 Task 显式写 `in_place` 或 `provisioning`。局部唯一索引 `idx_tasks_one_inplace_per_project ON tasks(projectId) WHERE type = 'write' AND workspaceState = 'in_place' AND status NOT IN ('completed', 'cancelled')`；旧 `legacy` 不计入索引。若迁移发现同项目有多个未结束 write Task，全部保留 `legacy`，新 Task 不得再选 `in_place`，直至旧任务终态。
   3. **新增 `kaiming/src/runtime/worktree.ts`（按需创建、可选钩子、诚实合流与清理）**：
      - **按需触发策略（拒绝一刀切）**：
-       - 同项目当前无其他未结束 `write Task` 且未显式指定 `isolatedWorkspace: true` → 默认 **`in_place` 原地模式**（保留 IDE 实时可见、零依赖复制成本与 P1-1 `dirtyBaseline`）；
-       - 同项目已存在其他未结束 `write Task`（真正多会话多任务并行），或 `task(op=create)` 显式传 `isolatedWorkspace: true`（且项目为可读 Git 仓库、存在有效 `HEAD`） → 自动创建独立 Worktree；非 Git 项目与 `read Task` 恒为 `in_place`。
+      - 同项目当前无其他未结束 `write Task`，且未显式指定 `isolatedWorkspace: true` → 默认 **`in_place`**。
+      - 同项目已有未结束 `write Task`（含 `legacy`/`in_place`/`provisioning`/`active`），或显式 `isolatedWorkspace: true`，且项目是可读 Git 仓库并有有效 `HEAD` → 在项目级事务/锁内分配 **`provisioning`** 并创建 Worktree。非 Git、无有效 `HEAD`、read Task 不建 Worktree；非 Git 项目的第二个 write Task 必须明确拒绝或要求串行，绝不静默回落 `in_place`。显式 `isolatedWorkspace: true` 遇到非 Git/无 `HEAD` 时返回 `WORKSPACE_UNSUPPORTED`，不得以 `in_place` 代替。
      - **存放位置与文件边界**：
-       - Worktree 建在仓库外部 **`<dataDir>/worktrees/<projectId>/<taskId>`**，分支名为 `kaiming/<taskId>`（从主工作区当前 `HEAD` 切出，记为 `baseCommit`），**绝不放在 `.git/` 内**；
+      - Worktree 建在仓库外的独立宿主根：默认 `~/.kaiming-worktrees/<projectId>/<taskId>`，支持 `KAIMING_WORKTREE_ROOT` 覆盖。根和最终路径必须 realpath 校验：禁止落在 `dataDir`、`project.realPath`、任一 `.git` 内；根目录 `0700`，拒绝相对路径和符号链接。
+      - `worktreeRoot` 是 `git worktree add/remove` 的仓库根；`workspacePath` 是项目在 Worktree 内的实际目录（Monorepo 为 `worktreeRoot/<relSubdir>`）；`workspaceRelPath` 保留 relSubdir，供 Worktree 回收后的 `git show` 使用。分支名为 `kaiming/<taskId>`，`baseCommit` 为创建时 HEAD。
        - 该 Task 的成员与活动上下文将 `createFileBoundaryGuard` 的 `projectRoot` 收紧到 `task.workspacePath`（保证 Pi 原生 `write`/`edit` 同样无法写穿主工作区或兄弟 Worktree）。
      - **依赖准备（禁止软链，简单可控）**：
        - **严禁**软链 `node_modules` 或 `.venv`；
-       - 若项目根目录存在可选脚本 `.dev/worktree-setup.sh`，宿主在 Worktree 创建后自动执行一次（供项目按自身技术栈选择 APFS `cp -c`、`pnpm install --offline`、复制 `.env*` 等）；无该脚本则零额外动作。
-     - **`.dev/backlog.md` 一致性**：
-       - Worktree 内照常使用 `backlog` 工具读写该 Worktree 的 `.dev/backlog.md`，并由 Settler 随代码、规格、结算报告一起提交（保持 D-07/S6 完整提交不变量）。
-     - **诚实合流门禁（`task(op=end)`）**：
-       - 先在 Worktree 内核对 `deliveryCommitGaps` 全部已提交、且 `taskCompletionGaps` 无缺项；
-       - 在项目级合流锁下检查主工作区目标分支：
-         1. **主分支未移动（`main HEAD === task.baseCommit`）且主工作区干净且位于目标分支**：执行 `git merge --ff-only kaiming/<taskId>`（合入树与已 Review/Test 的树逐字节一致，零语义冲突风险）→ `store.endTask` 标记 `completed` + `workspaceState = 'merged'` → 执行 `git worktree remove` 回收目录并删除临时分支（跨存储顺序与重启对账明确记录在 `workspaceState` 中）；
-         2. **主分支已移动（`main HEAD !== task.baseCommit`）**：**拒绝自动 rebase**，返回 `COMPLETION_INCOMPLETE` 并指出主分支已前移，由主管安排 Settler/Developer 在 Worktree 内 rebase 最新主分支并按 D-08/G3 重新验证组合成果后再收口；
-         3. **主工作区存在用户未提交脏改动，或主工作区切在其他分支**：**绝不碰用户主工作区**；支持由主管显式传 `landingMode: 'branch'`（或默认安全回落）以 `workspaceState = 'branch_kept'` 收口，保留已提交分支 `kaiming/<taskId>` 供用户自行合并，并给出明确分支名与合并指令。
-     - **取消与显式回收**：
-       - `task(op=control, command='cancel')` 严格遵守 D-06 保留 Worktree 现场；
-       - 新增写 RPC `task.workspace.remove(projectId, taskId, expectedRevision)`：仅允许清理已终态（`completed` / `cancelled`）Task 的残留 Worktree（及可选已合入分支），更新 `workspaceState = 'removed'`；
-       - `scanStartup` 扫描 `workspaceState = 'active'` 但目录缺失或半创建的异常记录并上报。
+      - 可选 `.dev/worktree-setup.sh` 必须由 P3-1 `workspace-write` 沙箱执行：cwd = `workspacePath`，共享 `privatePaths`、env allowlist、`.git` 只读和 auto/strict fail-closed；禁止宿主裸跑。只显式允许 `KAIMING_MAIN_WORKTREE`（之后同理允许 `KAIMING_TASK_ID`/`KAIMING_WORKSPACE_SLOT`），**禁止 `KAIMING_*` 通配**，避免泄露 `KAIMING_TOKEN`/`KAIMING_ENV_FILE`。`KAIMING_SANDBOX=off` 时默认拒绝自动执行；超时、非零退出、输出超限按 provisioning 失败清理。主工作区可读不可写（项目自身 `.env` 可读，工作台私有 `.env` 仍不可读）。
+    - **`.dev/backlog.md` 一致性**：
+      - 创建 Worktree 前要求主工作区 `.dev/backlog.md` 已跟踪且干净；不存在且本次 `backlogIds` 为空时允许创建。用 `git status --porcelain -- .dev/backlog.md` 检查，不能只依赖 `git diff`。
+      - `git worktree add` 后比较主工作区与 Worktree 中该文件的 SHA-256；两边都缺失视为一致，不一致立即判 provisioning 失败并清理。不复制未提交 backlog。两个 Worktree 通过 `claimBacklogItems` 领取不同条目；合流时 backlog 冲突走诚实门禁。
+    - **诚实合流门禁（`task(op=end)`）**：
+      - 先在 Worktree 内核对 `deliveryCommitGaps` 全部已提交、`taskCompletionGaps` 无缺项，并确认 Plan 与全部 `storage='project'` 报告已进入 `kaiming/<taskId>` 分支。
+      - 在项目级合流锁下检查主工作区目标分支：
+        1. **主分支未移动（`main HEAD === task.baseCommit`）且主工作区干净且位于目标分支**：执行 `git merge --ff-only kaiming/<taskId>`（不产生 merge commit）→ `store.endTask` 标记 `completed` + `workspaceState='merged'` → 回收 Worktree 并删除分支；
+        2. **主分支已移动**：**拒绝自动 rebase**，返回 `COMPLETION_INCOMPLETE` 并指出主分支已前移；在 Worktree 内 rebase 最新主分支并按 D-08/G3 重新验证组合成果后再收口；
+        3. **主工作区脏、切在其他分支，或用户选择保留分支**：**绝不碰用户主工作区**；以 `workspaceState='branch_kept'` 收口，保留 `kaiming/<taskId>`、`branchName`、`workspaceRelPath`、`baseCommit`，给出合并指令。Plan/报告按「活动 Worktree 磁盘 → 主工作区磁盘 → `git show <branch>:<workspaceRelPath>/<relPath>`」三级解析，`git show` 结果仍对 SHA-256 核对；分支被删除才如实报缺失。
+    - **取消、回收与恢复**：
+      - `task(op=control, command='cancel')` 严格遵守 D-06 保留 Worktree 现场。
+      - `task.workspace.remove(projectId, taskId, expectedRevision)` 仅允许终态：`merged` 可回收 Worktree 并删已合入分支；`branch_kept` 默认只回收 Worktree、**保留分支**，`workspaceState` 仍为 `branch_kept`，保留 `branchName`/`workspaceRelPath`/`baseCommit` 供 `git show`；`cancelled` 的 `active` 残留允许显式回收，默认只删 Worktree、保留未合入分支并置 `workspaceState='removed'`（`branchName`/`workspaceRelPath`/`baseCommit` 保留）；不强制删除有未提交文件或被 Git 拒绝的 Worktree。
+      - `scanStartup` 扫描 `provisioning` 和 `active` 的缺失/半创建记录，以及仓库根下无 Task 行对应的孤儿目录：清理半成品、必要时标 `cancelled`，释放 `sessions.currentTaskId` 与 backlog 认领，并上报真实残留。
+    - **provisioning 失败与崩溃**：
+      - `task(op=create)` 内任一步失败（`git worktree add`、setup、Plan 写入）：在返回错误前清理 Worktree/分支/Plan，删除刚插入的 provisioning Task 行，释放 `sessions.currentTaskId` 与 backlog 认领；清理本身失败也必须保证 Task 不再占坑，并保留真实残留证据。
+      - 进程中途崩溃：`scanStartup` 处理 `provisioning` 和孤儿目录，清理半成品、标 `cancelled` 并释放绑定；重复启动必须幂等。
+      - 状态迁移使用 revision/ownerEpoch CAS；不删除其他 Task 或其他进程拥有的目录。
 - **契约同步**：更新 `docs/technicalnew/storage-and-recovery.md`（S2 `v21 → v22`、S5/S6/S7）、`docs/technicalnew/agents-and-tools.md`（G2/G3）、`docs/technicalnew/runtime-contract.md`（R1 新增 `task.workspace.remove`）。
 - **验证档与负向控制（`broad` — 涉及 DB v22 迁移、交付路径解析与 Git 合流门禁）**：
   - `test/worktree.test.ts` & `test/git-commit-gate.test.ts`：
@@ -365,19 +371,24 @@
     3. **负向控制 2（保护脏主工作区）**：主工作区存在用户未提交脏文件时，Worktree Task 调用 `task(op=end)` 绝不覆盖或破坏主工作区文件；支持 `branch_kept` 安全收口。
     4. **负向控制 3（文件边界隔离）**：Worktree 成员尝试用 `write`/`edit` 修改主工作区或兄弟 Worktree 路径，必须被 `createFileBoundaryGuard` 拒绝。
     5. **负向控制 4（取消不删现场）**：`cancel` 后 Worktree 文件与报告保留；仅在终态调用 `task.workspace.remove` 才允许清理，运行中 Task 调 `task.workspace.remove` 必须拒绝。
+    6. **旧库兼容**：用真实 v21 快照迁移；同项目多个未结束 write Task 全部保留 `legacy`，新 Task 不得再选 `in_place`；旧绝对 Plan/报告仍可读。
+    7. **Monorepo**：项目是 Git 子目录时，`worktreeRoot` 与 `workspacePath` 分离；`git worktree add/remove` 用仓库根，`resolveTaskCwd`/文件边界用项目子目录。
+    8. **provisioning 负向控制**：Worktree 创建、setup、Plan 写任一步失败都不留 Task/占坑；模拟崩溃后 `scanStartup` 幂等清理并释放 backlog。
+    9. **backlog 一致性**：不存在且无 backlogIds 可创建；未跟踪/未提交/创建期变化一律失败；`git worktree add` 后 hash 不一致失败。
+    10. **setup 沙箱与 branch_kept**：setup 在 workspace-write 沙箱执行，`KAIMING_MAIN_WORKTREE` 显式允许且 `KAIMING_*` 不通配；`branch_kept` 回收 Worktree 后 Plan/全部项目报告经 `git show` 可读且 hash 通过。
 
 ---
 
 #### P3-3：多任务并发护栏、Worktree 实时文件视图与看板感知（`WP-Parallel`）
 
-**状态**：待实施（在 `P3-2` 之后实施）。
+**状态**：定版（2026-11-27），待实施（P3-2 之后实施）。
 
 - **问题与根因**：
   1. 架构文档 A4/S3 声明了“限制同时运行的专业 Session 数量”，但 `src/server/worker.ts`（第 67～74 行）与 `src/tools/delegation-tools.ts`（第 435～446 行）实际并无并发上限，且两条路径会并发拉起同一 `sessionId` 的 `runNext`。多任务并行时易瞬间拉爆本机 CPU/内存或触发模型网关 429 限流。
   2. `src/server/read-methods.ts`（第 758～839 行）的 `project.files.list`/`read` 只读 `project.realPath`，不支持查看活动 Worktree 里的实时新增/修改文件；前端看板也尚未展示多任务各自的隔离分支与跨任务范围重叠提示。
 - **修改文件与精确实现步骤**：
   1. **非阻塞专业 Session 并发配额（`kaiming/src/server/worker.ts`、`kaiming/src/runtime/runner.ts`、`kaiming/src/tools/delegation-tools.ts`）**：
-     - 新增配置项 `KAIMING_MAX_CONCURRENT_SPECIALISTS`（默认 `4`；Chief 会话与 `investigator(expectedKind='recovery')` 不占配额）；
+     - 新增配置项 `KAIMING_MAX_CONCURRENT_SPECIALISTS`（默认 `4`；Chief 与 `investigator(expectedKind='recovery')` 不占配额）。升级说明必须把默认 `4` 列为行为变化；`0` 仅作为显式关闭上限的运维选择，不改变默认值。
      - 消除 `delegation-tools.ts` 直接调 `runNext` 与 `worker.ts` 唤醒调 `runNext` 的双路径竞争（统一经单一调度口或按 `sessionId` 去重）；
      - **关键时序**：在 `claimNextInput` **之前**执行非阻塞名额检查——无可用槽位时直接返回 `{ kind: 'throttled' }`，让该输入保持 `queued`（绝不先标 `processing` 挂起）；当任一运行中成员结束、或进入 `waiting_user` 等待用户交互时释放/让出名额并触发 `worker.notify()`，防止等待用户的成员把全局配额占死导致死锁。
   2. **跨任务范围重叠雷达（`kaiming/src/tools/delegation-tools.ts` & `task-tools.ts`）**：
@@ -387,11 +398,19 @@
      - **约定环境变量**：为活动 Worktree 会话在 `bash` 环境中注入 `KAIMING_TASK_ID` 与 `KAIMING_WORKSPACE_SLOT`（小整数槽位，供项目按需选用，不作为通用端口隔离承诺）。
      - **前端（`kaiming/webapp/src/chat/SessionsList.tsx` & `/project` 看板）**：进行中 Task 卡片显示所属隔离分支/Worktree 状态（`in_place` / `⎇ kaiming/t-xxx` / `branch_kept`）、跨任务范围重叠提示、以及“清理残留 Worktree”操作入口（终态且未清理时）和主管会话跳转；点击进行中 Task 报告里的代码链接时 `FileViewer` 透传 `taskId`。
 - **契约同步**：更新 `docs/technicalnew/runtime-contract.md`（R1 `project.files.*` 可选 `taskId`）、`docs/technicalnew/storage-and-recovery.md`（S3 并发配额与 `waiting_user` 让槽语义）、`docs/technicalnew/ui-design.md`（U9 方法消费表）；注意外部 MCP 接入保持 [X-02](../productnew/modules/external-agents.md#x-02-每个项目一条固定会话) 单固定会话语义不变。
-- **验证档与负向控制（`focused`）**：
+- **验证档与负向控制**：P3-3a（统一调度口、全局配额、`waiting_user`）为 `broad`（共享调度层）；P3-3b（重叠雷达、`project.files.* taskId`、看板/FileViewer）为 `focused`。
   - `test/parallel-quota.test.ts` & `test/server-read.test.ts`：
     1. **配额负向控制**：设置 `KAIMING_MAX_CONCURRENT_SPECIALISTS = 2` 同时派发 4 个专业成员 → 任意时刻 `processing` 严格 ≤ 2，其余保持 `queued`（绝不提前变 `processing`），且前 2 个完成后自动唤醒后 2 个全部完成。
     2. **防死锁负向控制**：前 2 个成员全部进入 `waiting_user` 时，第 3 个成员或 `recovery` 调查仍可被正常认领执行，不发生死锁。
     3. **跨任务重叠与越权读负向控制**：两并行 Task 修改同一文件路径时返回 `crossTaskOverlapWarning`；`project.files.read` 传入其他项目的 `taskId` 必须返回 `NOT_FOUND`。
+
+#### P3-2/P3-3 兼容与升级边界
+
+- **旧数据可升级**：v21→v22 只加列/索引；旧 Task 保持 `legacy` 主工作区模式，旧绝对 Plan/报告路径继续可读。迁移前备份数据库，迁移重复执行幂等。
+- **旧库多 Task**：同项目已有多个未结束 write Task 时全部保留 `legacy`，不能事后补 Worktree；新 Task 不得再选 `in_place`，直到旧任务终态。
+- **旧程序不可回读**：旧程序打开 v22 会因版本过高拒绝启动；回滚只能恢复升级前备份。新写入的项目相对 Plan/报告也不能由旧程序读取。
+- **旧 API/MCP**：新增参数与字段均可选/增量；旧调用不需要改变；单主 Task 项目仍走 `in_place`，不自动创建分支或目录。
+- **行为变化**：非 Git 项目的第二个并发 write Task 明确拒绝或要求串行；P3-3 默认并发配额固定为 `4`，升级说明必须声明该行为变化；`0` 只是显式关闭上限，不是默认值。
 
 ---
 
