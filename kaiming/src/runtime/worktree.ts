@@ -6,6 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  executeSandboxedSync,
+  sandboxPolicyFor,
+  type SandboxRuntime,
+} from './os-sandbox.ts';
 
 export class WorktreeError extends Error {
   readonly code: string;
@@ -252,5 +257,40 @@ export function gitShowFile(params: {
     );
   } catch {
     return undefined;
+  }
+}
+
+/** Optional project hook, always inside the OS sandbox with only the main checkout path exposed. */
+export function runWorktreeSetup(params: {
+  readonly layout: WorktreeLayout;
+  readonly taskId: string;
+  readonly mainWorktree: string;
+  readonly sandbox?: SandboxRuntime;
+}): void {
+  const script = join(params.layout.workspacePath, '.dev', 'worktree-setup.sh');
+  if (!existsSync(script)) return;
+  if (params.sandbox === undefined || !params.sandbox.status.active) {
+    throw new WorktreeError('WORKSPACE_UNSUPPORTED', 'worktree setup requires an active OS sandbox', {
+      script,
+    });
+  }
+  const policy = {
+    ...sandboxPolicyFor('developer', params.layout.workspacePath, params.sandbox, params.taskId),
+    envAllowlist: ['KAIMING_MAIN_WORKTREE'],
+  };
+  const quoted = `'${script.replace(/'/g, `'\\''`)}'`;
+  const result = executeSandboxedSync({
+    policy,
+    command: `bash ${quoted}`,
+    cwd: params.layout.workspacePath,
+    env: { ...process.env, KAIMING_MAIN_WORKTREE: params.mainWorktree },
+    timeoutSeconds: 600,
+  });
+  if (result.exitCode !== 0) {
+    throw new WorktreeError('WORKSPACE_UNSUPPORTED', 'the worktree setup script failed', {
+      script,
+      exitCode: result.exitCode,
+      stderr: result.stderr.slice(0, 4000),
+    });
   }
 }

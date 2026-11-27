@@ -43,6 +43,7 @@ import { createTaskWithWorkspace } from './task-creation.ts';
 import { deliveryCommitGaps } from './completion-git.ts';
 import { landWorktree } from '../runtime/worktree.ts';
 import { removeWorktree } from '../runtime/worktree.ts';
+import type { SandboxRuntime } from '../runtime/os-sandbox.ts';
 
 
 export interface TaskToolContext {
@@ -59,6 +60,7 @@ export interface TaskToolContext {
   readonly worktreeRoot?: string;
   /** Host data/credential paths a worktree must never be created inside. */
   readonly privateDirs?: readonly string[];
+  readonly sandbox?: SandboxRuntime;
   /** Host control hook: stops the Task's own work before the final status is written. */
   readonly controlTask?: (params: {
     taskId: string;
@@ -541,6 +543,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       serverWorkDir: context.serverWorkDir,
       ...(context.worktreeRoot !== undefined ? { worktreeRoot: context.worktreeRoot } : {}),
       ...(context.privateDirs !== undefined ? { privateDirs: context.privateDirs } : {}),
+      ...(context.sandbox !== undefined ? { sandbox: context.sandbox } : {}),
       type,
       workKind,
       requiresTest,

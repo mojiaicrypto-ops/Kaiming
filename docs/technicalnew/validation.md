@@ -276,3 +276,10 @@
 - **实现**：`countProcessingSpecialists` 统计 processing 且非 chief/investigator、无 pending interaction 的输入；InputRunner 在 claim 前非阻塞检查，超限返回 `throttled` 并保持 queued；服务端默认 4。
 - **证据**：store 测试覆盖 chief/investigator 不计与结束时释放；step-wake e2e 3/3；全量 75/786；typecheck 通过。
 - **边界**：等待用户恢复时的配额重新占用、跨任务重叠、文件视图/UI、setup 与 workspace.remove 未完成；workbench 仍停止。
+
+### 2026-11-27 · P3-2b2：Setup 沙箱与按 Task 文件读取
+
+- **问题**：Worktree 缺依赖，只读文件接口仍固定主工作区。
+- **实现**：`executeSandboxedSync` + `.dev/worktree-setup.sh` 在 workspace-write 沙箱内执行，仅显式允许 `KAIMING_MAIN_WORKTREE`；setup 失败回收 provisioning。`project.files.list/read` 增加可选 `taskId`，校验项目归属后读取 `resolveTaskCwd`。
+- **证据**：定向 worktree/server-read/task-tools 63/63；全量 75/786；typecheck 通过。
+- **边界**：UI 的 Worktree 展示/清理按钮、跨任务重叠雷达、workspace.remove RPC 未完成。

@@ -762,9 +762,10 @@ function backlogItemView(
     write: false,
     run: (params): unknown => {
       const project = requireProject(store, params);
+      const cwd = filesRoot(store, project, params);
       const limit = clampLimit(readNumber(params, 'limit'));
       const requested = readString(params, 'path') ?? '.';
-      const target = resolveInsideProject(project.realPath, requested);
+      const target = resolveInsideProject(cwd, requested);
       if (!existsSync(target)) {
         throw new RpcError('NOT_FOUND', `${requested} does not exist in this project`, { path: requested });
       }
@@ -786,7 +787,7 @@ function backlogItemView(
         const info = lstatSync(full);
         return {
           name,
-          path: relative(project.realPath, full).split(sep).join('/'),
+          path: relative(cwd, full).split(sep).join('/'),
           type: info.isSymbolicLink() ? 'symlink' : info.isDirectory() ? 'directory' : info.isFile() ? 'file' : 'other',
           size: info.isFile() ? info.size : null,
           updatedAt: info.mtime.toISOString(),
@@ -804,11 +805,12 @@ function backlogItemView(
     write: false,
     run: (params): unknown => {
       const project = requireProject(store, params);
+      const cwd = filesRoot(store, project, params);
       const requested = readString(params, 'path');
       if (requested === undefined) {
         throw new RpcError('INVALID_ARGUMENT', 'path is required');
       }
-      const target = resolveInsideProject(project.realPath, requested);
+      const target = resolveInsideProject(cwd, requested);
       if (!existsSync(target) || !statSync(target).isFile()) {
         throw new RpcError('NOT_FOUND', `${requested} is not a file in this project`, { path: requested });
       }
@@ -894,6 +896,20 @@ function requireProject(store: Store, params: Record<string, unknown>) {
     throw new RpcError('NOT_FOUND', `project ${projectId} does not exist`, { projectId });
   }
   return project;
+}
+
+function filesRoot(
+  store: Store,
+  project: { readonly id: string; readonly realPath: string },
+  params: Record<string, unknown>,
+): string {
+  const taskId = readString(params, 'taskId');
+  if (taskId === undefined) return project.realPath;
+  const task = store.getTask(taskId);
+  if (task === undefined || task.projectId !== project.id) {
+    throw new RpcError('NOT_FOUND', `Task ${taskId} does not exist in this project`, { taskId });
+  }
+  return store.resolveTaskCwd(task);
 }
 
 function requireSession(

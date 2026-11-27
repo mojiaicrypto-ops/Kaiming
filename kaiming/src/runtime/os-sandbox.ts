@@ -636,6 +636,34 @@ export function createSandboxedBashOperations(policy: SandboxPolicy): BashOperat
   return { exec: (command, cwd, options) => executeInSandbox(policy, command, cwd, options) };
 }
 
+/** Host-owned one-shot setup inside the same boundary (no Pi tool, no interactive prompt). */
+export function executeSandboxedSync(params: {
+  readonly policy: SandboxPolicy;
+  readonly command: string;
+  readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly timeoutSeconds?: number;
+  readonly backend?: SandboxBackend;
+}): { readonly exitCode: number; readonly stderr: string } {
+  const built = sandboxCommand(params.policy, params.command, params.backend ?? detectSandboxBackend());
+  try {
+    const result = spawnSync(built.file, built.args, {
+      cwd: params.cwd,
+      env: sandboxEnvironment(params.env ?? process.env, params.policy),
+      encoding: 'utf8',
+      timeout: (params.timeoutSeconds ?? 600) * 1000,
+      windowsHide: true,
+      ...(built.stdin === true ? { input: params.command } : {}),
+    });
+    return {
+      exitCode: result.status ?? 1,
+      stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    };
+  } finally {
+    built.cleanup();
+  }
+}
+
 export interface SandboxProbeOptions {
   readonly privatePaths: readonly string[];
   readonly tempRoot: string;

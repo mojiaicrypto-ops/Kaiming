@@ -57,7 +57,7 @@
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）；另含 `compacting`（Pi 正在摘要）与实时 `sandbox{mode,backend,active,reason}`（启动探针状态，独立于输入历史）；`lastInputError` 是最新 failed 输入的 `{inputId,status,code,message}`（未由宿主持久化关闭的 interrupted 成员也可显示；主管 watchdog 中断先被宿主记为 stopped，仍走恢复路径），旧 `MODEL_ERROR` 按消息分类，后续输入清除；失败/中断发生时另发 `input{inputId,status,error}` 实时帧。`inputs` 的 queued 项附 `text/imageCount`，队列直接显示用户正文，不用 inputId 代替。先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
 | config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
-| project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |
+| project.files.list/read | projectId、path、taskId?；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；传入 taskId 时校验 Task 所属项目并读取 `resolveTaskCwd`（活动 Worktree 或主工作区）；实际路径归属检查，不访问外部符号链接 |
 | session.cleanup | projectId、sessionId、expectedRevision | 只清理无未结束工作且不被当前 Task/成果引用的会话；被引用时拒绝并列明原因 |
 | session.archive | projectId、sessionId、expectedRevision、archived | 只用 revision CAS 写/清 `archivedAt`；拒绝非 chief、外部固定通道、当前 Task 或排队/运行/未核实中断的会话；不改历史、Task、报告和项目文件 |
 | auth.login/logout | login:本机配置的访问口令；logout:当前会话 | login 建立同源 cookie；logout 撤销 cookie/关闭所属流连接；不进入模型/WAL 业务输入 |

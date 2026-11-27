@@ -673,6 +673,7 @@ export class InputRunner {
           projectId: session.projectId,
           ...(this.options.privateDirs !== undefined ? { privateDirs: this.options.privateDirs } : {}),
           ...(this.options.worktreeRoot !== undefined ? { worktreeRoot: this.options.worktreeRoot } : {}),
+          ...(this.options.sandbox !== undefined ? { sandbox: this.options.sandbox } : {}),
           cwd: session.cwd,
           roleId: session.roleId,
           inputId: live?.inputId ?? input.inputId,

@@ -15,6 +15,8 @@ import { commitPlan, planRefFor, planTarget, type PlanTarget } from '../runtime/
 import { captureDirtyBaseline } from '../runtime/deliverable.ts';
 import { createWorktree, defaultWorktreeRoot, removeWorktree, WorktreeError } from '../runtime/worktree.ts';
 import type { WorktreeLayout } from '../runtime/worktree.ts';
+import { runWorktreeSetup } from '../runtime/worktree.ts';
+import type { SandboxRuntime } from '../runtime/os-sandbox.ts';
 
 export interface CreateTaskWithWorkspaceParams {
   readonly store: Store;
@@ -25,6 +27,7 @@ export interface CreateTaskWithWorkspaceParams {
   readonly serverWorkDir: string;
   readonly worktreeRoot?: string;
   readonly privateDirs?: readonly string[];
+  readonly sandbox?: SandboxRuntime;
   readonly type: TaskType;
   readonly workKind: WorkKind;
   readonly requiresTest: boolean;
@@ -94,6 +97,12 @@ export function createTaskWithWorkspace(params: CreateTaskWithWorkspaceParams): 
       taskId,
       root,
       ...(params.privateDirs !== undefined ? { privateDirs: params.privateDirs } : {}),
+    });
+    runWorktreeSetup({
+      layout,
+      taskId,
+      mainWorktree: params.cwd,
+      ...(params.sandbox !== undefined ? { sandbox: params.sandbox } : {}),
     });
     const target = planTarget({
       taskId,
