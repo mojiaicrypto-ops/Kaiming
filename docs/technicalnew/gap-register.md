@@ -323,7 +323,7 @@
 
 #### P3-2：按需 Task 级 Git Worktree 隔离与诚实合流门禁（`WP-Worktree`）
 
-**状态**：实施中（2026-11-27）：v23 分配、Worktree 创建/ff-only/branch_kept、merged 回收、Artifact 相对路径与启动 provisioning 恢复已落；setup hook、显式 workspace.remove、P3-3 并发/文件视图/UI 仍待实施。
+**状态**：实施中（2026-11-27）：v23 分配、Worktree 创建/ff-only/branch_kept、merged 回收、Artifact 相对路径与启动 provisioning 恢复已落；setup hook、显式 workspace.remove、P3-3 重叠雷达/文件视图/UI 仍待实施；全局专业并发上限已接入 Runner。
 
 - **问题与根因**：
   1. 数据库层（`idx_tasks_one_open_per_chief` 与 `claimBacklogItems`）已支持同项目多主管会话各自推进一项 Task，但当前所有 Task 及其成员全部共享 `project.realPath` 与同一个 `.git/index`。并发写 Task 时，一方的改动会污染另一方的 `scopeCheck`、`snapshotDelivery` 与提交门禁。

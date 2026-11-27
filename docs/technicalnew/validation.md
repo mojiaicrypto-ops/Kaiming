@@ -8,7 +8,7 @@
 
 | 验证层 | 入口命令 | 当前通过规模与覆盖核心 |
 |---|---|---|
-| **服务端单元/集成** | `npm --prefix kaiming test` | **75 文件 / 785 用例通过**（SQLite WAL 接纳/认领/迁移至 v23、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、P3-2a 分配与 v23 迁移、真实 Git Worktree 创建/ff-only/branch_kept/Monorepo/根拒绝/task end 落地/provisioning 清理、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
+| **服务端单元/集成** | `npm --prefix kaiming test` | **75 文件 / 786 用例通过**（SQLite WAL 接纳/认领/迁移至 v23、Pi 1.0 SDK 桥接、五领域工具、待办双向解析、交付快照与 Git 提交门禁、P3-2a 分配与 v23 迁移、真实 Git Worktree 创建/ff-only/branch_kept/Monorepo/根拒绝/task end 落地/provisioning 清理、步骤停稳唤醒、空闲按需扫描、报告重试结构账本、P3-3 专业并发计数、`codemode` 沙箱权限、P3-1 OS 沙箱与角色边界、模型失败分类与快照错误恢复等，含负向控制与变异自检） |
 | **前端单元** | `npm --prefix kaiming/webapp test` | **21 文件 / 146 用例通过**（`slot.ts` 流式合并与重连去重、任务流程推导 `task-flow`、看板分组、模糊模型匹配、链接归属解析、提醒差分、输入失败横幅与终态等待、根错误边界等） |
 | **类型与构建** | `npm --prefix kaiming run typecheck`、`npm --prefix kaiming/webapp run typecheck`、`npm --prefix kaiming run build` | 服务端与 webapp `tsc --noEmit` 零错误，Vite 生产构建产出 `web-static/` |
 | **提示词契约** | `npm --prefix kaiming run check:prompts` | **15/15 通过**（9 份角色提示词与 `AGENTS.md` 按 G4 边界切片、无中日韩字符、装配顺序正确、39 个内部链接与锚点全部可解析） |
@@ -269,3 +269,10 @@
 - **实现**：ArtifactRef 增加项目相对路径；`readArtifact` 按活动路径→主工作区→`git show` 分支读取并对 SHA-256 校验；merged `task end` 回收 Worktree/分支；启动扫描 provisioning，强制清理并取消 Task。
 - **证据**：Worktree 测试 10/10（merged 后 Plan 从主工作区读取、Worktree 目录消失）；全量 75/785；typecheck 通过。
 - **边界**：branch_kept 自动回收、显式 workspace.remove、setup hook、P3-3 并发/UI 未完成；当前 workbench 仍停止。
+
+### 2026-11-27 · P3-3a：全局专业并发配额
+
+- **问题**：worker 会启动所有 runnable 专业 Session，没有全局上限。
+- **实现**：`countProcessingSpecialists` 统计 processing 且非 chief/investigator、无 pending interaction 的输入；InputRunner 在 claim 前非阻塞检查，超限返回 `throttled` 并保持 queued；服务端默认 4。
+- **证据**：store 测试覆盖 chief/investigator 不计与结束时释放；step-wake e2e 3/3；全量 75/786；typecheck 通过。
+- **边界**：等待用户恢复时的配额重新占用、跨任务重叠、文件视图/UI、setup 与 workspace.remove 未完成；workbench 仍停止。

@@ -2632,6 +2632,20 @@ export class Store {
     return row !== undefined;
   }
 
+  /** Active specialist model runs; waiting-user inputs release the slot. */
+  countProcessingSpecialists(): number {
+    const row = this.stmt(`SELECT COUNT(*) AS count FROM session_inputs i
+      JOIN sessions s ON s.id = i.sessionId
+      WHERE i.status = 'processing'
+        AND s.roleId NOT IN ('chief', 'investigator')
+        AND NOT EXISTS (
+          SELECT 1 FROM interactions x
+          WHERE x.inputId = i.inputId AND x.state = 'pending'
+        )`,)
+      .get() as { count: number };
+    return Number(row.count);
+  }
+
   /** Provisioning failed before the Task became usable; remove the row and release its bindings. */
   abortProvisioningTask(taskId: string): TaskRow {
     return this.transaction(() => {

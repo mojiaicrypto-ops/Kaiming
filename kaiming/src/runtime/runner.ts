@@ -97,6 +97,7 @@ export type CompactionOutcome =
 
 export type RunOutcome =
   | { readonly kind: 'idle' }
+  | { readonly kind: 'throttled' }
   | { readonly kind: 'busy'; readonly inputId: string }
   | { readonly kind: 'blocked'; readonly inputId: string; readonly code: 'RECOVERY_REQUIRED' }
   | { readonly kind: 'controlled'; readonly inputId: string; readonly code: 'TASK_CONTROLLED' }
@@ -170,6 +171,8 @@ export interface RunnerOptions {
    * the user or on a dispatched step is not charged: that is not the run's own work.
    */
   readonly runTotalMs?: number;
+  /** Global specialist cap; 0 disables (Chief/investigator are never counted). */
+  readonly maxConcurrentSpecialists?: number;
   /**
    * Default timeout for a bash call that omits one (Pi's tool has no default). 0 disables the
    * guard. A timeout is a tool result the model can act on, not a run abort.
@@ -524,6 +527,14 @@ export class InputRunner {
         code: 'INVALID_ARGUMENT',
         detail: `unknown roleId ${JSON.stringify(session.roleId)}`,
       };
+    }
+    if (
+      session.roleId !== 'chief' &&
+      session.roleId !== 'investigator' &&
+      (this.options.maxConcurrentSpecialists ?? 0) > 0 &&
+      this.options.store.countProcessingSpecialists() >= (this.options.maxConcurrentSpecialists ?? 0)
+    ) {
+      return { kind: 'throttled' };
     }
     // Task-level control eligibility (pause/cancel of the owning Task) arrives with the task table
     // in P3; until then only the storage-level rules (busy / unresolved interrupted) are enforced.

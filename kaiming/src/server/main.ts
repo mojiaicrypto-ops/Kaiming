@@ -364,6 +364,7 @@ export async function startWorkbench(options: StartOptions): Promise<{
     // Absolute, because the guard compares real paths: a relative data dir would otherwise be
     // resolved against each session's project and guard nothing.
     privateDirs: [...sandbox.privatePaths],
+    maxConcurrentSpecialists: Number(process.env['KAIMING_MAX_CONCURRENT_SPECIALISTS'] ?? 4),
     sandbox,
     resolveConfig: (roleId, projectId) =>
       resolveStoredConfig({

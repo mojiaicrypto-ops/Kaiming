@@ -1174,4 +1174,34 @@ describe('startup scan and abandoned questions', () => {
     expect(supplement.reworkCount).toBe(1);
   });
 
+
+  it('counts only active non-waiting specialist inputs against the global cap', () => {
+    const { store } = openStore();
+    seed(store);
+    for (const id of ['d-1', 'd-2']) {
+      store.createSession({ id, projectId: 'p-1', roleId: 'developer', cwd: '/projects/alpha' });
+      accept(store, {
+        inputId: `i-${id}`,
+        sessionId: id,
+        sourceKey: `${id}:i`,
+        requestKey: `req-${id}`,
+      });
+      expect(store.claimNextInput(id).kind).toBe('claimed');
+    }
+    expect(store.countProcessingSpecialists()).toBe(2);
+
+    accept(store);
+    expect(store.claimNextInput('s-1').kind).toBe('claimed');
+    expect(store.countProcessingSpecialists()).toBe(2);
+
+    store.createSession({ id: 'rec', projectId: 'p-1', roleId: 'investigator', cwd: '/projects/alpha' });
+    accept(store, { inputId: 'i-rec', sessionId: 'rec', sourceKey: 'rec:i', requestKey: 'req-rec' });
+    expect(store.claimNextInput('rec').kind).toBe('claimed');
+    expect(store.countProcessingSpecialists()).toBe(2);
+
+    const first = store.getInput('i-d-1');
+    if (first === undefined) throw new Error('developer input missing');
+    store.finishInput({ inputId: first.inputId, expectedRevision: first.revision, status: 'completed' });
+    expect(store.countProcessingSpecialists()).toBe(1);
+  });
 });
