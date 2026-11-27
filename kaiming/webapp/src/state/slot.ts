@@ -77,6 +77,10 @@ export interface TaskSummaryView {
   createdAt?: string;
   updatedAt?: string;
   requiresTest?: boolean;
+  workspaceState?: string;
+  worktreeRoot?: string | null;
+  workspacePath?: string | null;
+  branchName?: string | null;
 }
 
 export interface TaskDetail {

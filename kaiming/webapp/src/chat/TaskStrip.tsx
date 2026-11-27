@@ -59,6 +59,12 @@ export function TaskStrip({ detail, onOpenTask, onPause, onResume, pendingQuesti
         <button type="button" className="chip-btn mono" onClick={onOpenTask} data-testid="task-open">
           {task.taskId}
         </button>
+        {task.branchName !== null && task.branchName !== undefined ? (
+          <span className="mono" title={task.workspacePath ?? undefined}>
+            {task.workspaceState === 'branch_kept' ? '⎇ kept ' : '⎇ '}
+            {task.branchName}
+          </span>
+        ) : null}
         <ol className="phases" data-testid="task-phases">
           {flow.map((step, index) => {
             const plan = step.kind === 'plan';

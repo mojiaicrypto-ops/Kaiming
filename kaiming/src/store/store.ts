@@ -2688,6 +2688,23 @@ export class Store {
     });
   }
 
+  /** Mark a terminal Task's retained workspace as explicitly cleaned. */
+  markWorkspaceRemoved(taskId: string, expectedRevision: number): TaskRow {
+    return this.transaction(() => {
+      const result = this.stmt(`UPDATE tasks
+        SET workspaceState = 'removed', worktreeRoot = NULL, workspacePath = NULL,
+            revision = revision + 1, updatedAt = ?
+        WHERE id = ? AND revision = ? AND status IN ('completed', 'cancelled')`,)
+        .run(this.clock(), taskId, expectedRevision);
+      if (result.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'the Task is not a terminal Task with this revision', {
+          taskId,
+        });
+      }
+      return this.requireTask(taskId);
+    });
+  }
+
   /** The worktree and Plan exist; the Task may now run in its workspace. */
   activateTaskWorkspace(taskId: string): TaskRow {
     return this.transaction(() => {

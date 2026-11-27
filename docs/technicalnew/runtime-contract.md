@@ -50,6 +50,7 @@
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
 | task.list/get | projectId、taskId?、cursor?、limit?；get 另可给 includePlan | Task 看板/详情，无模型也可读；摘要含 `sourceInputId`（创建它的授权输入，外部运行的标识由此派生）；`includePlan` 时 `plan` 返回 Plan 正文与 `current`（文件是否仍与保存时一致）；报告正文按 `resultId` 另经 `task.report.get` 读取，本方法只给结果摘要 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
+| task.workspace.remove | projectId、taskId、expectedRevision | 仅终态 Task；merged 回收 Worktree 并删已合入分支，branch_kept 只回收目录、保留分支；更新 workspaceState=removed |
 | backlog.list/get | projectId、state?/query?/limit?/cursor?，或 id | 使用同一文件读取服务；返回条目、问题、警告、更新时间，以及每条关联的未结束 Task 及其真实状态、最近一次已结束或已取消的关联（用于“上一次的 Task 已取消”）；有问题的条目如实返回，不隐藏，不经模型 |
 | backlog.add/update/close/reopen | projectId、内容或 id、expectedDigest?、note?、state、taskIds? | 界面的写入口（模型用 `backlog` 工具的 add/close/edit）：更新与重开必须带 expectedDigest，不一致返回 VERSION_CONFLICT 并带回当前条目；写入在项目锁内、原子替换 |
 | interaction.list（修改） | projectId、sessionId?（省略即本项目全部） | 省略 sessionId 时返回本项目全部未回答的问题，每条带 taskId 与 sourceSessionId；给出时行为不变；只读，不需要实时订阅 |

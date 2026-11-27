@@ -1068,6 +1068,10 @@ function taskSummary(store: Store, task: ReturnType<Store['getTask']> & object) 
     completionResultId: task.completionResultId,
     // The input whose authorization created this Task: the run handle an external caller was given.
     sourceInputId: task.sourceInputId,
+    workspaceState: task.workspaceState,
+    worktreeRoot: task.worktreeRoot,
+    workspacePath: task.workspacePath,
+    branchName: task.branchName,
     phaseMembers: store.listTaskSessions(task.id).map((member) => member.sessionId),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,

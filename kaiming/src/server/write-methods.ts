@@ -21,6 +21,7 @@ import {
 } from '../runtime/backlog-store.ts';
 import { wakeForSettledStep } from './step-wake.ts';
 import { textOfPayload } from '../runtime/input-text.ts';
+import { removeWorktree, WorktreeError } from '../runtime/worktree.ts';
 
 export interface WriteMethodsOptions {
   /** Attachment storage for image blocks; absent means this server accepts text only. */
@@ -269,6 +270,51 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
     },
   });
 
+  router.register('task.workspace.remove', {
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const taskId = readString(params, 'taskId');
+      const expectedRevision = params['expectedRevision'];
+      if (taskId === undefined || typeof expectedRevision !== 'number') {
+        throw new RpcError('INVALID_ARGUMENT', 'taskId and expectedRevision are required');
+      }
+      const task = store.getTask(taskId);
+      if (task === undefined || task.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `Task ${taskId} does not exist in this project`, { taskId });
+      }
+      if (task.status !== 'completed' && task.status !== 'cancelled') {
+        throw new RpcError('INVALID_ARGUMENT', 'only a terminal Task workspace can be removed', {
+          taskId,
+          status: task.status,
+        });
+      }
+      if (task.worktreeRoot !== null && task.branchName !== null && task.workspaceState !== 'removed') {
+        try {
+          removeWorktree({
+            projectRoot: project.realPath,
+            worktreeRoot: task.worktreeRoot,
+            branchName: task.branchName,
+            deleteBranch: task.workspaceState === 'merged',
+          });
+        } catch (error) {
+          throw new RpcError('WORKSPACE_BUSY', 'the retained worktree could not be removed', {
+            taskId,
+            ...(error instanceof WorktreeError ? error.details : {}),
+          });
+        }
+      }
+      const updated = store.markWorkspaceRemoved(taskId, expectedRevision);
+      options.invalidate?.(task.chiefSessionId, 'task', taskId);
+      options.notify();
+      return {
+        taskId,
+        workspaceState: updated.workspaceState,
+        branchName: updated.branchName,
+        revision: updated.revision,
+      };
+    },
+  });
   router.register('session.cleanup', {
     write: true,
     run: (params): unknown => {

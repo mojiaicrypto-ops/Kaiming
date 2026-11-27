@@ -282,4 +282,10 @@
 - **问题**：Worktree 缺依赖，只读文件接口仍固定主工作区。
 - **实现**：`executeSandboxedSync` + `.dev/worktree-setup.sh` 在 workspace-write 沙箱内执行，仅显式允许 `KAIMING_MAIN_WORKTREE`；setup 失败回收 provisioning。`project.files.list/read` 增加可选 `taskId`，校验项目归属后读取 `resolveTaskCwd`。
 - **证据**：定向 worktree/server-read/task-tools 63/63；全量 75/786；typecheck 通过。
-- **边界**：UI 的 Worktree 展示/清理按钮、跨任务重叠雷达、workspace.remove RPC 未完成。
+- **边界**：清理按钮交互与跨任务重叠雷达未完成。
+
+### 2026-11-27 · P3-3b：workspace.remove 与工作树标识
+
+- **实现**：新增 task.workspace.remove RPC（终态/归属/revision；merged 删分支，branch_kept 保留），Task 摘要与 TaskStrip 显示 branch/branch_kept。
+- **证据**：全量 75/786；server/webapp typecheck 通过。
+- **边界**：清理按钮尚未接线；跨任务重叠、waiting_user 配额重新占用未完成。
