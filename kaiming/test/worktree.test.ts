@@ -265,7 +265,7 @@ describe('task worktrees', () => {
     store.createProject({ id: 'p-1', realPath: project });
     store.createSession({ id: 'c-1', projectId: 'p-1', roleId: 'chief', cwd: project });
     store.createSession({ id: 'c-2', projectId: 'p-1', roleId: 'chief', cwd: project });
-    const markdown = '# Plan\n\n## 验收\n- observable\n';
+    const markdown = '# Plan\n\n## 验收\n- observable\n## 范围\n- `src/**`\n';
     const base = {
       store,
       projectId: 'p-1',
@@ -286,6 +286,7 @@ describe('task worktrees', () => {
     };
     const first = createTaskWithWorkspace({ ...base, chiefSessionId: 'c-1', inputId: 'i-1' });
     const second = createTaskWithWorkspace({ ...base, chiefSessionId: 'c-2', inputId: 'i-2' });
+    expect(second.warnings.join(' ')).toContain(first.task.id);
 
     expect(first.task.workspaceState).toBe('in_place');
     expect(second.task.workspaceState).toBe('active');

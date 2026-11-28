@@ -568,6 +568,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
         planRef: task.planRef,
         planState: created.planState,
         scopeCheck: scopeCheckFor(created.taskCwd, planMarkdown, task.dirtyBaseline),
+        ...(created.warnings.length > 0 ? { warnings: created.warnings } : {}),
         ...guidanceFor(context.store, task),
       },
     );

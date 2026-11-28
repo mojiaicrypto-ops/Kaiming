@@ -288,4 +288,6 @@
 
 - **实现**：新增 task.workspace.remove RPC（终态/归属/revision；merged 删分支，branch_kept 保留），Task 摘要与 TaskStrip 显示 branch/branch_kept。
 - **证据**：全量 75/786；server/webapp typecheck 通过。
-- **边界**：清理按钮尚未接线；跨任务重叠、waiting_user 配额重新占用未完成。
+- **边界**：清理按钮已接入 TaskDrawer；waiting_user 配额重新占用与 FileViewer taskId 切换未完成。
+
+- **补充**：Task 创建比较同项目其他活动写 Task 的 Plan「范围」，返回非阻断 overlap 警告；TaskStrip 显示 Worktree/branch_kept，TaskDrawer 提供清理按钮。服务端 75/786，webapp 146/146。

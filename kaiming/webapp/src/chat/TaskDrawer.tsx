@@ -37,6 +37,7 @@ export function TaskDrawer({ rpc, projectId, detail, onOpenFile, projectRealPath
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [workspace, setWorkspace] = useState<'idle' | 'removing' | 'done' | 'failed'>('idle');
   useEffect(() => {
     if (openId === null) return;
     let cancelled = false;
@@ -157,6 +158,39 @@ export function TaskDrawer({ rpc, projectId, detail, onOpenFile, projectRealPath
           <div>{detail.task.nextStep}</div>
         </div>
       )}
+      {detail.task.branchName != null &&
+        (detail.task.status === 'completed' || detail.task.status === 'cancelled') &&
+        detail.task.workspaceState !== 'removed' && (
+          <div className="sec" data-testid="task-workspace">
+            <div className="sh">{t('task.removeWorkspace')}</div>
+            <div className="row">
+              <span className="mono ell">{detail.task.branchName}</span>
+              <span className="sp" />
+              <button
+                type="button"
+                className="btn"
+                disabled={workspace === 'removing' || workspace === 'done'}
+                onClick={() => {
+                  setWorkspace('removing');
+                  void rpc
+                    .call('task.workspace.remove', {
+                      projectId,
+                      taskId: detail.task.taskId,
+                      expectedRevision: detail.task.revision,
+                    })
+                    .then(() => setWorkspace('done'))
+                    .catch(() => setWorkspace('failed'));
+                }}
+              >
+                {workspace === 'done'
+                  ? t('task.removeWorkspaceDone')
+                  : workspace === 'failed'
+                    ? t('task.removeWorkspaceFailed')
+                    : t('task.removeWorkspace')}
+              </button>
+            </div>
+          </div>
+        )}
       <div className="sec">
         <div className="sh">{t('task.results')}</div>
         {detail.results.length === 0 && <div className="f3">{t('task.noResults')}</div>}

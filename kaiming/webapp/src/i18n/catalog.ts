@@ -401,6 +401,9 @@ const en = {
 
   // ---------- task detail ----------
   'task.detail': 'Task detail',
+  'task.removeWorkspace': 'Clean up workspace',
+  'task.removeWorkspaceDone': 'Workspace cleaned up',
+  'task.removeWorkspaceFailed': 'Workspace cleanup failed',
   'task.goal': 'Goal',
   'task.scope': 'Scope',
   'task.nextStep': 'Next step',
@@ -1007,6 +1010,9 @@ export const zhCN: Record<MessageKey, string> = {
 
   // ---------- task detail ----------
   'task.detail': '任务详情',
+  'task.removeWorkspace': '清理工作区',
+  'task.removeWorkspaceDone': '工作区已清理',
+  'task.removeWorkspaceFailed': '工作区清理失败',
   'task.goal': '目标',
   'task.scope': '范围',
   'task.nextStep': '下一步',

@@ -3,8 +3,10 @@
  * in_place/worktree allocation and its compensation live in one place.
  */
 import { randomUUID } from 'node:crypto';
+import { matchesGlob } from 'node:path';
 import {
   StoreError,
+  OPEN_TASK_STATUSES,
   type Store,
   type TaskRow,
   type TaskType,
@@ -16,6 +18,8 @@ import { captureDirtyBaseline } from '../runtime/deliverable.ts';
 import { createWorktree, defaultWorktreeRoot, removeWorktree, WorktreeError } from '../runtime/worktree.ts';
 import type { WorktreeLayout } from '../runtime/worktree.ts';
 import { runWorktreeSetup } from '../runtime/worktree.ts';
+import { extractScope } from '../runtime/plan-contract.ts';
+import { readArtifact } from '../runtime/artifact-reader.ts';
 import type { SandboxRuntime } from '../runtime/os-sandbox.ts';
 
 export interface CreateTaskWithWorkspaceParams {
@@ -47,8 +51,27 @@ export interface CreatedTask {
   readonly target: PlanTarget;
   readonly taskCwd: string;
   readonly planState: 'saved' | 'pending';
+  readonly warnings: readonly string[];
 }
 
+function crossTaskWarnings(store: Store, task: TaskRow, planMarkdown: string): string[] {
+  const current = extractScope(planMarkdown) ?? [];
+  if (current.length === 0) return [];
+  const warnings: string[] = [];
+  for (const other of store.listTasks(task.projectId)) {
+    if (other.id === task.id || other.type !== 'write' || !OPEN_TASK_STATUSES.includes(other.status)) continue;
+    const otherPlan = other.planRef === null ? '' : readArtifact(store, other, other.planRef).text;
+    const paths = extractScope(otherPlan) ?? [];
+    for (const own of current) {
+      for (const theirs of paths) {
+        if (matchesGlob(own, theirs) || matchesGlob(theirs, own)) {
+          warnings.push(`${other.id} overlaps ${own} (${theirs})`);
+        }
+      }
+    }
+  }
+  return [...new Set(warnings)].slice(0, 8);
+}
 export function createTaskWithWorkspace(params: CreateTaskWithWorkspaceParams): CreatedTask {
   const taskId = `t-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   const root = params.worktreeRoot ?? defaultWorktreeRoot();
@@ -179,7 +202,12 @@ export function createTaskWithWorkspace(params: CreateTaskWithWorkspaceParams): 
       cleanup();
       throw error;
     }
-    return { ...allocated, taskCwd, planState: 'pending' };
+    return {
+      ...allocated,
+      taskCwd,
+      planState: 'pending',
+      warnings: crossTaskWarnings(params.store, allocated.task, params.planMarkdown),
+    };
   }
   if (allocated.task.workspaceState === 'provisioning') {
     try {
@@ -194,5 +222,10 @@ export function createTaskWithWorkspace(params: CreateTaskWithWorkspaceParams): 
       throw error;
     }
   }
-  return { ...allocated, taskCwd, planState: 'saved' };
+  return {
+    ...allocated,
+    taskCwd,
+    planState: 'saved',
+    warnings: crossTaskWarnings(params.store, allocated.task, params.planMarkdown),
+  };
 }
