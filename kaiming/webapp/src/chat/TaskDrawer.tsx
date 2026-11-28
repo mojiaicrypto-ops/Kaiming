@@ -15,7 +15,7 @@ export interface TaskDrawerProps {
   readonly projectId: string;
   readonly detail: TaskDetail;
   /** Open one project file in the same viewer the project browser uses. */
-  readonly onOpenFile: (path: string) => void;
+  readonly onOpenFile: (path: string, taskId?: string) => void;
   /** The project's absolute path: what an absolute link inside the body is measured against. */
   readonly projectRealPath: string;
   /** A link that leaves the project: the drawer cannot read it, and says so. */
@@ -82,7 +82,7 @@ export function TaskDrawer({ rpc, projectId, detail, onOpenFile, projectRealPath
             <button
               type="button"
               className="entry"
-              onClick={() => onOpenFile(body.relativePath ?? '')}
+              onClick={() => onOpenFile(body.relativePath ?? '', detail.task.taskId)}
               data-testid="report-open-file"
             >
               <span className="mono ell">{body.relativePath}</span>

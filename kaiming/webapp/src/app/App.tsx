@@ -41,14 +41,17 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   const [filePath, setFilePath] = useState<string | null>(null);
   /** The line the viewer should reveal; it belongs to one opening, not to the file selection. */
   const [fileLine, setFileLine] = useState<number | undefined>(undefined);
-  const openFile = useCallback((path: string | null, line?: number) => {
+  const [fileTaskId, setFileTaskId] = useState<string | undefined>(undefined);
+  const openFile = useCallback((path: string | null, line?: number, taskId?: string) => {
     setFilePath(path);
     setFileLine(line);
+    setFileTaskId(taskId);
   }, []);
   /** The viewer is a canvas over one screen; asking for any screen closes it first. */
   const go = useCallback((path: string) => {
     setFilePath(null);
     setFileLine(undefined);
+    setFileTaskId(undefined);
     navigate(path);
   }, []);
   useShortcuts(go);
@@ -384,9 +387,10 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             rpc={rpc}
             projectId={workspace.projectId}
             path={filePath}
+            taskId={fileTaskId}
             focusLine={fileLine}
             entries={workspace.project?.entries ?? []}
-            onOpenPath={(path) => openFile(path)}
+            onOpenPath={(path) => openFile(path, undefined, fileTaskId)}
             onClose={() => openFile(null)}
             projectRealPath={workspace.project?.realPath ?? ''}
             onOutside={() => notify(t('files.outside'), 'error')}

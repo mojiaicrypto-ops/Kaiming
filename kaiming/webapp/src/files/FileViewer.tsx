@@ -31,6 +31,8 @@ interface FileBody {
 export interface FileViewerProps {
   readonly rpc: RpcClient;
   readonly projectId: string;
+  /** Read the project through this Task's worktree when given. */
+  readonly taskId?: string;
   /**
    * The file to open. `null` opens the project root listing, which is how the viewer is also a
    * browser: one component, one engine, two entry points.
@@ -60,7 +62,7 @@ export interface FileViewerProps {
  * `.html`), the browser's own player for images and media, and an honest notice plus a download
  * for bytes that cannot be displayed. It renders files; it does not run them.
  */
-export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, onOpenPath, onDownload, projectRealPath, onOutside }: FileViewerProps) {
+export function FileViewer({ rpc, projectId, taskId, path, focusLine, entries, onClose, onOpenPath, onDownload, projectRealPath, onOutside }: FileViewerProps) {
   const { t } = useI18n();
   const [body, setBody] = useState<FileBody | null>(null);
   const [listing, setListing] = useState<readonly Entry[]>([]);
@@ -82,6 +84,7 @@ export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, 
       try {
         const page = await rpc.call<{ entries: readonly Entry[]; nextCursor: string | null }>('project.files.list', {
           projectId,
+          ...(taskId !== undefined ? { taskId } : {}),
           path: target,
           limit: 200,
         });
@@ -92,7 +95,7 @@ export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, 
         setBody(null);
       } catch (cause) {
         try {
-          const read = await rpc.call<FileBody>('project.files.read', { projectId, path: target });
+          const read = await rpc.call<FileBody>('project.files.read', { projectId, ...(taskId !== undefined ? { taskId } : {}), path: target });
           if (cancelled) return;
           setBody(read);
         } catch {
@@ -105,7 +108,7 @@ export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, 
     return () => {
       cancelled = true;
     };
-  }, [path, projectId, rpc]);
+  }, [path, projectId, taskId, rpc]);
 
   const openDirectory = useCallback(
     async (target: string): Promise<void> => {
@@ -118,6 +121,7 @@ export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, 
     if (nextCursor === null) return;
     const page = await rpc.call<{ entries: readonly Entry[]; nextCursor: string | null }>('project.files.list', {
       projectId,
+      ...(taskId !== undefined ? { taskId } : {}),
       path: dir,
       limit: 200,
       cursor: nextCursor,
